@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 from dotenv import load_dotenv
 
 from config import FilterConfig
@@ -37,8 +37,10 @@ with st.sidebar:
                    "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud).")
 
     # --- Data e stagione ---
-    scan_date = st.date_input("📅 Data partite", value=date.today())
-    season = st.number_input("🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1)
+    scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
+    season = st.number_input(
+        "🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
+    )
 
     # --- Campionati ---
     cfg_temp = FilterConfig()
@@ -47,7 +49,8 @@ with st.sidebar:
         "🏆 Campionati monitorati",
         league_options,
         default=league_options,
-        help="Seleziona i campionati da analizzare. Meno campionati = meno chiamate API."
+        key="selected_leagues",
+        help="Seleziona i campionati da analizzare. Meno campionati = meno chiamate API.",
     )
 
     if not selected_leagues:
@@ -57,33 +60,55 @@ with st.sidebar:
     name_to_id = {v: k for k, v in cfg_temp.LEAGUES_NAMES.items()}
     selected_league_ids = [name_to_id[n] for n in selected_leagues]
 
-    st.caption(f"ℹ️ **Piano free ≈ 100 req/giorno**: con {len(selected_leagues)} leghe, "
-               "una scan completa può esaurire la quota giornaliera.")
+    st.caption(
+        f"ℹ️ **Piano free ≈ 100 req/giorno**: con {len(selected_leagues)} leghe, "
+        "una scan completa può esaurire la quota giornaliera."
+    )
 
     st.divider()
 
     # --- Filtro 1: Over 2.5 ---
     st.subheader("📊 Filtro 1 - Over 2.5")
-    over25_max = st.number_input("Quota max Over 2.5", 1.20, 2.50, 1.80, 0.05)
-    use_avg = st.checkbox("Accetta anche Media Gol > soglia", value=True,
-                          help="Se la quota Over 2.5 supera la soglia, accetta comunque se la media gol delle ultime 20 partite è > 2.6")
-    avg_goals_min = st.number_input("Media gol minima (alternativa)", 2.0, 3.5, 2.6, 0.1)
+    over25_max = st.number_input(
+        "Quota max Over 2.5", 1.20, 2.50, 1.80, 0.05, key="over25_max"
+    )
+    use_avg = st.checkbox(
+        "Accetta anche Media Gol > soglia",
+        value=True,
+        key="use_avg",
+        help="Se la quota Over 2.5 supera la soglia, accetta comunque se la media gol delle ultime 20 partite è > soglia",
+    )
+    avg_goals_min = st.number_input(
+        "Media gol minima (alternativa)", 2.0, 3.5, 2.6, 0.1, key="avg_goals_min"
+    )
 
     # --- Filtro 2: 0-0 storici ---
     st.subheader("🚫 Filtro 2 - 0-0 storici")
-    zero_zero_pct = st.slider("Frequenza max 0-0 (%)", 0, 30, 10,
-                              help="STRICT < 10%: su 20 gare significa AL MASSIMO 1 zero-a-zero")
-    zero_zero_n = st.number_input("Campione partite", 10, 30, 20)
+    zero_zero_pct = st.slider(
+        "Frequenza max 0-0 (%)", 0, 30, 10, key="zero_zero_pct",
+        help="STRICT < 10%: su 20 gare significa AL MASSIMO 1 zero-a-zero",
+    )
+    zero_zero_n = st.number_input(
+        "Campione partite (Filtro 2)", 10, 30, 20, key="zero_zero_n"
+    )
 
     # --- Filtro 3: Gol 1° Tempo ---
     st.subheader("⚽ Filtro 3 - Gol 1° Tempo")
-    ht_pct = st.slider("Min % Over 0.5 1HT", 50, 90, 70)
-    ht_n = st.number_input("Campione partite", 10, 30, 20)
+    ht_pct = st.slider(
+        "Min % Over 0.5 1HT", 50, 90, 70, key="ht_pct"
+    )
+    ht_n = st.number_input(
+        "Campione partite (Filtro 3)", 10, 30, 20, key="ht_n"
+    )
 
     # --- Filtro 4: Favorita in casa ---
     st.subheader("🏠 Filtro 4 - Favorita in casa")
-    home_min = st.number_input("Quota min casa", 1.10, 2.00, 1.40, 0.05)
-    home_max = st.number_input("Quota max casa", 1.20, 2.50, 1.85, 0.05)
+    home_min = st.number_input(
+        "Quota min casa", 1.10, 2.00, 1.40, 0.05, key="home_min"
+    )
+    home_max = st.number_input(
+        "Quota max casa", 1.20, 2.50, 1.85, 0.05, key="home_max"
+    )
 
     if home_min >= home_max:
         st.error("❌ Il limite minimo deve essere inferiore al massimo.")
@@ -91,8 +116,12 @@ with st.sidebar:
 
     # --- Filtro 5: Pareggio ---
     st.subheader("🤝 Filtro 5 - Pareggio")
-    draw_min = st.number_input("Quota min pareggio", 2.50, 4.00, 3.40, 0.05)
-    draw_max = st.number_input("Quota max pareggio", 3.50, 5.00, 4.30, 0.05)
+    draw_min = st.number_input(
+        "Quota min pareggio", 2.50, 4.00, 3.40, 0.05, key="draw_min"
+    )
+    draw_max = st.number_input(
+        "Quota max pareggio", 3.50, 5.00, 4.30, 0.05, key="draw_max"
+    )
 
     if draw_min >= draw_max:
         st.error("❌ Il limite minimo deve essere inferiore al massimo.")
@@ -122,11 +151,16 @@ with st.sidebar:
 # HEADER
 # ============================================================
 st.title("⚽ Football Phase 1 Analyzer")
-st.caption(f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • Strategia Lay the Draw / Over 2.5")
+st.caption(
+    f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • "
+    "Strategia Lay the Draw / Over 2.5"
+)
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    scan_btn = st.button("🔍 Avvia scansione", type="primary", use_container_width=True)
+    scan_btn = st.button(
+        "🔍 Avvia scansione", type="primary", use_container_width=True, key="scan_btn"
+    )
 with col2:
     total_placeholder = st.empty()
     total_placeholder.metric("Partite totali", "-")
@@ -147,15 +181,21 @@ if scan_btn:
         st.stop()
 
     if not fixtures:
-        st.warning(f"⚠️ Nessuna partita pre-match trovata per il **{scan_date.strftime('%d/%m/%Y')}**.\n\n"
-                   "Possibili cause:\n"
-                   "- Nessuna partita in programma\n"
-                   "- Partite già iniziate (lo script analizza solo pre-match)\n"
-                   "- Stagione errata (verifica il parametro in sidebar)")
+        st.warning(
+            f"⚠️ Nessuna partita pre-match trovata per il "
+            f"**{scan_date.strftime('%d/%m/%Y')}**.\n\n"
+            "Possibili cause:\n"
+            "- Nessuna partita in programma\n"
+            "- Partite già iniziate (lo script analizza solo pre-match)\n"
+            "- Stagione errata (verifica il parametro in sidebar)"
+        )
         st.stop()
 
     total_placeholder.metric("Partite totali", len(fixtures))
-    st.info(f"🔄 Analisi di **{len(fixtures)} partite** in corso... (richiede ~2-3 minuti)")
+    st.info(
+        f"🔄 Analisi di **{len(fixtures)} partite** in corso... "
+        "(richiede ~2-3 minuti)"
+    )
 
     progress = st.progress(0)
     status = st.empty()
@@ -167,18 +207,24 @@ if scan_btn:
     for i, fx in enumerate(fixtures):
         home_name = fx["teams"]["home"]["name"]
         away_name = fx["teams"]["away"]["name"]
-        status.write(f"Analisi **{i+1}/{len(fixtures)}**: {home_name} vs {away_name}")
+        status.write(
+            f"Analisi **{i+1}/{len(fixtures)}**: {home_name} vs {away_name}"
+        )
         progress.progress((i + 1) / len(fixtures))
 
         try:
             odds_data = get_odds(fx["fixture"]["id"])
         except QuotaExceeded:
             quota_hit = True
-            st.warning(f"⚠️ **Quota API esaurita** dopo {len(results)} partite analizzate. "
-                       "Riprova domani o riduci i campionati in sidebar.")
+            st.warning(
+                f"⚠️ **Quota API esaurita** dopo {len(results)} partite analizzate. "
+                "Riprova domani o riduci i campionati in sidebar."
+            )
             break
         except ApiError as exc:
-            st.warning(f"⚠️ Quote non disponibili per {home_name} vs {away_name}: {exc}")
+            st.warning(
+                f"⚠️ Quote non disponibili per {home_name} vs {away_name}: {exc}"
+            )
             continue
 
         if not odds_data:
@@ -213,7 +259,10 @@ if scan_btn:
             for r in passed:
                 with st.container(border=True):
                     st.subheader(f"⚽ {r.home} vs {r.away}")
-                    st.caption(f"{r.league} • {r.kickoff[:16]} • Bookmaker: {r.bookmaker or 'n/d'}")
+                    st.caption(
+                        f"{r.league} • {r.kickoff[:16]} • "
+                        f"Bookmaker: {r.bookmaker or 'n/d'}"
+                    )
 
                     cols = st.columns(5)
                     for (k, v), col in zip(r.filters.items(), cols):
@@ -229,7 +278,7 @@ if scan_btn:
         st.divider()
         col_tg1, col_tg2, col_tg3 = st.columns([1, 1, 2])
         with col_tg1:
-            if st.button("📱 Invia su Telegram", type="primary"):
+            if st.button("📱 Invia su Telegram", type="primary", key="send_tg_btn"):
                 if not get_secret("TELEGRAM_BOT_TOKEN") or not get_secret("TELEGRAM_CHAT_ID"):
                     st.error("❌ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
                 else:
@@ -245,10 +294,19 @@ if scan_btn:
         # --- Quasi qualificate (4/5 filtri) ---
         almost = [r for r in results if r.passed_count == 4]
         if almost:
-            st.info(f"💡 **{len(almost)} partite** hanno superato 4 filtri su 5 (quasi qualificate):")
+            st.info(
+                f"💡 **{len(almost)} partite** hanno superato 4 filtri su 5 "
+                "(quasi qualificate):"
+            )
             for r in almost:
-                failed = [k for k, v in r.filters.items() if not v["pass"] and not v.get("skipped")]
-                st.write(f"• **{r.home} vs {r.away}** — fallisce: {', '.join(failed) if failed else 'filtro skipped'}")
+                failed = [
+                    k for k, v in r.filters.items()
+                    if not v["pass"] and not v.get("skipped")
+                ]
+                st.write(
+                    f"• **{r.home} vs {r.away}** — fallisce: "
+                    f"{', '.join(failed) if failed else 'filtro skipped'}"
+                )
 
     # --- Tutte le partite analizzate ---
     with st.expander(f"📊 Tutte le partite analizzate ({len(results)})"):
@@ -260,13 +318,17 @@ if scan_btn:
         if raw_sample:
             st.json(raw_sample[0])
         else:
-            st.info("Nessuna risposta quote ricevuta: controlla chiave API e quota disponibile.")
+            st.info(
+                "Nessuna risposta quote ricevuta: controlla chiave API "
+                "e quota disponibile."
+            )
 
 else:
     # ============================================================
     # SCHERMATA INIZIALE
     # ============================================================
-    st.markdown("""
+    st.markdown(
+        """
     ### 👋 Benvenuto nel Football Phase 1 Analyzer
 
     Questa app automatizza la **Fase 1** della tua strategia di trading sportivo, applicando 5 filtri numerici alle partite del giorno:
@@ -285,7 +347,8 @@ else:
     3. Ricevi le partite qualificate qui e su Telegram
 
     ⚠️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
-    """)
+    """
+    )
 
     # --- Status credenziali ---
     st.divider()
