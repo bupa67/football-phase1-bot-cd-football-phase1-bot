@@ -257,3 +257,16 @@ def get_available_leagues() -> list:
     """Recupera la lista di tutte le leghe disponibili su apifootball.com."""
     raw = _api_request("get_leagues", {})
     return raw
+
+def search_leagues(query: str = "") -> list:
+    """Cerca leghe per nome. Se query è vuota, restituisce le prime 50."""
+    all_leagues = get_available_leagues()
+    if not query:
+        return all_leagues[:50]
+    
+    query_lower = query.lower()
+    return [
+        l for l in all_leagues
+        if query_lower in l.get("league_name", "").lower()
+        or query_lower in l.get("country_name", "").lower()
+    ]
