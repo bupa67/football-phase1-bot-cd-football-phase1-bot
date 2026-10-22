@@ -52,7 +52,6 @@ def _api_request(action: str, params: dict) -> list:
         r = requests.get(BASE_URL, params=req_params, timeout=20)
         
         if r.status_code != 200:
-            # Debug: mostra l'URL chiamato (con chiave mascherata)
             safe_url = r.url.replace(req_params["APIkey"], "CHIAVE_NASCOSTA")
             raise ApiError(
                 f"Errore HTTP {r.status_code}\n"
@@ -146,7 +145,6 @@ def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
             fixtures = _fixtures_for_league_cached(date_ddmmyyyy, league_id)
             all_fixtures.extend(fixtures)
         except ApiError as e:
-            # Se una lega dà errore, salta e continua con le altre
             logger.warning(f"Errore per lega {league_id}: {e}")
             continue
     
@@ -240,7 +238,7 @@ def test_api_connection() -> str:
         if isinstance(data, list) and len(data) > 0:
             return f"✅ Connessione riuscita! Trovati {len(data)} paesi. La chiave è valida."
             
-        return f"️ Risposta inaspettata: {data}"
+        return f"⚠️ Risposta inaspettata: {data}"
         
     except Exception as e:
         return f"❌ Eccezione: {str(e)}"
