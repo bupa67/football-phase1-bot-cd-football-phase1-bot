@@ -220,3 +220,41 @@ def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
             return parsed[name], name
 
     return {"home": None, "draw": None, "away": None, "over25": None}, ""
+
+def test_api_connection() -> str:
+    """
+    Testa la connessione API con l'endpoint più semplice possibile (get_countries).
+    Restituisce "OK" o il messaggio di errore esatto.
+    """
+    key = get_secret("API_FOOTBALL_KEY")
+    if not key or not key.strip():
+        return "❌ La chiave API è vuota o non configurata."
+    
+    # Endpoint di test che richiede solo la APIkey
+    url = "https://apiv3.apifootball.com/"
+    params = {"APIkey": key.strip(), "action": "get_countries"}
+    
+    try:
+        # Mascheriamo la chiave per la stampa a video
+        safe_params = {**params, "APIkey": "CHIAVE_NASCOSTA"}
+        print(f"DEBUG URL: {url}?APIkey=CHIAVE_NASCOSTA&action=get_countries")
+        
+        r = requests.get(url, params=params, timeout=10)
+        
+        if r.status_code != 200:
+            return f"❌ Errore HTTP {r.status_code}. Risposta del server: {r.text}"
+            
+        data = r.json()
+        
+        # Se apifootball restituisce un errore dentro il JSON
+        if isinstance(data, dict) and "error" in data:
+            return f"❌ Errore dall'API: {data['error']}"
+            
+        # Se restituisce una lista di paesi, funziona!
+        if isinstance(data, list) and len(data) > 0:
+            return f"✅ Connessione riuscita! Trovati {len(data)} paesi. La chiave è valida."
+            
+        return f"⚠️ Risposta inaspettata: {data}"
+        
+    except Exception as e:
+        return f"❌ Eccezione durante la richiesta: {str(e)}"
