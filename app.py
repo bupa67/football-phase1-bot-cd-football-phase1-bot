@@ -1,4 +1,4 @@
-"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con diagnostica."""
+"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con discovery leghe."""
 from __future__ import annotations
 
 import streamlit as st
@@ -7,7 +7,14 @@ from datetime import date
 from dotenv import load_dotenv
 
 from config import FilterConfig
-from api_client import get_fixtures_today, get_odds, ApiError, QuotaExceeded, test_api_connection
+from api_client import (
+    get_fixtures_today,
+    get_odds,
+    get_available_leagues,
+    ApiError,
+    QuotaExceeded,
+    test_api_connection,
+)
 from filters import analyze_fixture, FilterResult
 from telegram_bot import send_telegram, build_message
 from credentials import get_secret
@@ -34,14 +41,17 @@ with st.sidebar:
     # --- Verifica credenziali ---
     api_key = get_secret("API_FOOTBALL_KEY")
     if not api_key:
-        st.error("️ **API_FOOTBALL_KEY** non configurata.\n\n"
-                 "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud).")
+        st.error(
+            "️ **API_FOOTBALL_KEY** non configurata.\n\n"
+            "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud)."
+        )
     else:
         st.success(f"✅ API Key caricata: `{api_key[:6]}...{api_key[-4:]}`")
 
     # --- Diagnostica API ---
     st.divider()
     st.subheader("🔧 Diagnostica")
+
     if st.button("🔌 Testa Connessione API", use_container_width=True, key="test_api_btn"):
         with st.spinner("Testo la chiave API..."):
             result = test_api_connection()
@@ -51,41 +61,59 @@ with st.sidebar:
             st.error(result)
 
     st.divider()
-        st.divider()
-    
+
+    # --- Discovery Leghe ---
+    st.subheader(" Scopri ID Leghe")
+    st.caption("Usa questo pulsante per trovare gli ID corretti dei campionati su apifootball.com")
+
     if st.button("📋 Mostra Leghe Disponibili", use_container_width=True, key="show_leagues_btn"):
         with st.spinner("Recupero lista leghe..."):
             try:
                 leagues = get_available_leagues()
                 st.success(f"✅ Trovate {len(leagues)} leghe")
-                
-                # Filtra solo i campionati europei principali per facilitare la ricerca
-                target_names = ["premier", "la liga", "bundesliga", "serie a", "ligue 1", "eredivisie"]
-                filtered = [l for l in leagues if any(t in l.get("league_name", "").lower() for t in target_names)]
-                
+
+                # Filtra i campionati europei principali
+                target_names = [
+                    "premier", "la liga", "bundesliga", "serie a",
+                    "ligue 1", "eredivisie", "portugal", "belgium",
+                    "scotland", "turkey", "greece", "russia",
+                ]
+                filtered = [
+                    l for l in leagues
+                    if any(t in l.get("league_name", "").lower() for t in target_names)
+                ]
+
                 if filtered:
-                    st.write(f"**Campionati principali trovati:**")
+                    st.write("**Campionati principali trovati:**")
                     for l in filtered:
-                        st.write(f"• ID: `{l.get('league_id')}` - {l.get('league_name')} ({l.get('country_name')})")
+                        st.write(
+                            f"• ID: `{l.get('league_id')}` - "
+                            f"**{l.get('league_name')}** ({l.get('country_name')})"
+                        )
                 else:
-                    st.warning("Nessun campionato principale trovato. Mostra tutti:")
-                    for l in leagues[:20]:  # Prime 20 leghe
-                        st.write(f"• ID: `{l.get('league_id')}` - {l.get('league_name')}")
-                        
+                    st.warning("Nessun campionato principale trovato. Mostra i primi 30:")
+                    for l in leagues[:30]:
+                        st.write(
+                            f"• ID: `{l.get('league_id')}` - "
+                            f"{l.get('league_name')} ({l.get('country_name')})"
+                        )
+
             except Exception as e:
                 st.error(f"Errore: {e}")
+
+    st.divider()
 
     # --- Data e stagione ---
     scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
     season = st.number_input(
-        "🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
+        "️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
     )
 
     # --- Campionati ---
     cfg_temp = FilterConfig()
     league_options = list(cfg_temp.LEAGUES_NAMES.values())
     selected_leagues = st.multiselect(
-        "🏆 Campionati monitorati",
+        " Campionati monitorati",
         league_options,
         default=league_options,
         key="selected_leagues",
@@ -226,13 +254,14 @@ if scan_btn:
             "Possibili cause:\n"
             "- Nessuna partita in programma\n"
             "- Partite già iniziate (lo script analizza solo pre-match)\n"
+            "- **ID leghe errati** (usa il pulsante 'Mostra Leghe Disponibili' per scoprire gli ID corretti)\n"
             "- Stagione errata (verifica il parametro in sidebar)"
         )
         st.stop()
 
     total_placeholder.metric("Partite totali", len(fixtures))
     st.info(
-        f"🔄 Analisi di **{len(fixtures)} partite** in corso... "
+        f" Analisi di **{len(fixtures)} partite** in corso... "
         "(richiede ~2-3 minuti)"
     )
 
@@ -294,10 +323,10 @@ if scan_btn:
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         # --- Dettaglio espandibile ---
-        with st.expander(f" Dettaglio completo ({len(passed)} partite)"):
+        with st.expander(f"📋 Dettaglio completo ({len(passed)} partite)"):
             for r in passed:
                 with st.container(border=True):
-                    st.subheader(f" {r.home} vs {r.away}")
+                    st.subheader(f"⚽ {r.home} vs {r.away}")
                     st.caption(
                         f"{r.league} • {r.kickoff[:16]} • "
                         f"Bookmaker: {r.bookmaker or 'n/d'}"
@@ -317,9 +346,9 @@ if scan_btn:
         st.divider()
         col_tg1, col_tg2, col_tg3 = st.columns([1, 1, 2])
         with col_tg1:
-            if st.button("📱 Invia su Telegram", type="primary", key="send_tg_btn"):
+            if st.button(" Invia su Telegram", type="primary", key="send_tg_btn"):
                 if not get_secret("TELEGRAM_BOT_TOKEN") or not get_secret("TELEGRAM_CHAT_ID"):
-                    st.error("❌ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
+                    st.error(" Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
                 else:
                     msg = build_message(passed)
                     if send_telegram(msg):
@@ -348,7 +377,7 @@ if scan_btn:
                 )
 
     # --- Tutte le partite analizzate ---
-    with st.expander(f"📊 Tutte le partite analizzate ({len(results)})"):
+    with st.expander(f" Tutte le partite analizzate ({len(results)})"):
         df_all = pd.DataFrame([r.to_dict() for r in results])
         st.dataframe(df_all, use_container_width=True, hide_index=True)
 
@@ -381,18 +410,19 @@ else:
     | 5 | Pareggio 3.40-4.30 | Finestra d'oro per il Lay the Draw |
 
     **Come iniziare:**
-    1. Configura i parametri nella sidebar a sinistra
-    2. Usa il pulsante **" Testa Connessione API"** per verificare la chiave
-    3. Clicca su **"🔍 Avvia scansione"**
-    4. Ricevi le partite qualificate qui e su Telegram
+    1. Usa il pulsante **"📋 Mostra Leghe Disponibili"** nella sidebar per scoprire gli ID corretti dei campionati
+    2. Configura i parametri nella sidebar a sinistra
+    3. Usa il pulsante **"🔌 Testa Connessione API"** per verificare la chiave
+    4. Clicca su **"🔍 Avvia scansione"**
+    5. Ricevi le partite qualificate qui e su Telegram
 
-    ️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
+    ⚠️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
     """
     )
 
     # --- Status credenziali ---
     st.divider()
-    st.subheader(" Status configurazione")
+    st.subheader("🔐 Status configurazione")
 
     col1, col2, col3 = st.columns(3)
     with col1:
