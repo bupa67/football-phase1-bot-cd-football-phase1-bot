@@ -1,4 +1,4 @@
-"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con discovery leghe."""
+"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con ricerca leghe."""
 from __future__ import annotations
 
 import streamlit as st
@@ -11,6 +11,7 @@ from api_client import (
     get_fixtures_today,
     get_odds,
     get_available_leagues,
+    search_leagues,
     ApiError,
     QuotaExceeded,
     test_api_connection,
@@ -32,7 +33,7 @@ st.set_page_config(
 )
 
 # ============================================================
-# SIDEBAR: configurazione filtri e diagnostica
+# SIDEBAR: configurazione filtri
 # ============================================================
 with st.sidebar:
     st.title("⚙️ Parametri Filtri")
@@ -62,58 +63,17 @@ with st.sidebar:
 
     st.divider()
 
-    # --- Discovery Leghe ---
-    st.subheader(" Scopri ID Leghe")
-    st.caption("Usa questo pulsante per trovare gli ID corretti dei campionati su apifootball.com")
-
-    if st.button("📋 Mostra Leghe Disponibili", use_container_width=True, key="show_leagues_btn"):
-        with st.spinner("Recupero lista leghe..."):
-            try:
-                leagues = get_available_leagues()
-                st.success(f"✅ Trovate {len(leagues)} leghe")
-
-                # Filtra i campionati europei principali
-                target_names = [
-                    "premier", "la liga", "bundesliga", "serie a",
-                    "ligue 1", "eredivisie", "portugal", "belgium",
-                    "scotland", "turkey", "greece", "russia",
-                ]
-                filtered = [
-                    l for l in leagues
-                    if any(t in l.get("league_name", "").lower() for t in target_names)
-                ]
-
-                if filtered:
-                    st.write("**Campionati principali trovati:**")
-                    for l in filtered:
-                        st.write(
-                            f"• ID: `{l.get('league_id')}` - "
-                            f"**{l.get('league_name')}** ({l.get('country_name')})"
-                        )
-                else:
-                    st.warning("Nessun campionato principale trovato. Mostra i primi 30:")
-                    for l in leagues[:30]:
-                        st.write(
-                            f"• ID: `{l.get('league_id')}` - "
-                            f"{l.get('league_name')} ({l.get('country_name')})"
-                        )
-
-            except Exception as e:
-                st.error(f"Errore: {e}")
-
-    st.divider()
-
     # --- Data e stagione ---
     scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
     season = st.number_input(
-        "️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
+        "🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
     )
 
     # --- Campionati ---
     cfg_temp = FilterConfig()
     league_options = list(cfg_temp.LEAGUES_NAMES.values())
     selected_leagues = st.multiselect(
-        " Campionati monitorati",
+        "🏆 Campionati monitorati",
         league_options,
         default=league_options,
         key="selected_leagues",
@@ -135,7 +95,7 @@ with st.sidebar:
     st.divider()
 
     # --- Filtro 1: Over 2.5 ---
-    st.subheader(" Filtro 1 - Over 2.5")
+    st.subheader("📊 Filtro 1 - Over 2.5")
     over25_max = st.number_input(
         "Quota max Over 2.5", 1.20, 2.50, 1.80, 0.05, key="over25_max"
     )
@@ -178,7 +138,7 @@ with st.sidebar:
     )
 
     if home_min >= home_max:
-        st.error("❌ Il limite minimo deve essere inferiore al massimo.")
+        st.error(" Il limite minimo deve essere inferiore al massimo.")
         st.stop()
 
     # --- Filtro 5: Pareggio ---
@@ -217,7 +177,7 @@ with st.sidebar:
 # ============================================================
 # HEADER
 # ============================================================
-st.title(" Football Phase 1 Analyzer")
+st.title("⚽ Football Phase 1 Analyzer")
 st.caption(
     f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • "
     "Strategia Lay the Draw / Over 2.5"
@@ -236,6 +196,75 @@ with col3:
     passed_placeholder.metric("✅ Qualificate", "-")
 
 # ============================================================
+# SEZIONE SCOPERTA LEGHE (nella pagina principale)
+# ============================================================
+st.divider()
+with st.expander("🔎 Scopri ID Leghe (clicca per espandere)", expanded=False):
+    st.markdown("""
+    ### 🔍 Ricerca Leghe apifootball.com
+    
+    Usa la casella di ricerca per trovare l'ID corretto dei campionati.
+    **Scrivi il nome del campionato o del paese** e premi Invio.
+    """)
+    
+    col_search1, col_search2 = st.columns([3, 1])
+    with col_search1:
+        search_query = st.text_input(
+            "Cerca campionato o paese",
+            placeholder="es: Premier, Spain, Italy, Serie A...",
+            key="league_search"
+        )
+    with col_search2:
+        search_btn = st.button("🔍 Cerca", use_container_width=True, key="league_search_btn")
+    
+    # Quick search buttons per i campionati principali
+    st.markdown("**Ricerca rapida:**")
+    quick_cols = st.columns(6)
+    quick_searches = ["Premier", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Eredivisie"]
+    
+    search_triggered = False
+    for i, qs in enumerate(quick_searches):
+        with quick_cols[i]:
+            if st.button(qs, use_container_width=True, key=f"quick_{qs.replace(' ', '_')}"):
+                search_query = qs
+                search_triggered = True
+    
+    if search_btn or search_triggered or search_query:
+        with st.spinner("Ricerca in corso..."):
+            try:
+                results = search_leagues(search_query)
+                st.success(f"✅ Trovate {len(results)} leghe")
+                
+                if results:
+                    # Crea DataFrame per visualizzazione tabellare
+                    df_leagues = pd.DataFrame([{
+                        "ID": l.get("league_id", "N/A"),
+                        "Campionato": l.get("league_name", "N/A"),
+                        "Paese": l.get("country_name", "N/A"),
+                    } for l in results])
+                    
+                    # Mostra tabella ordinabile
+                    st.dataframe(
+                        df_leagues,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(400, len(results) * 35 + 38)
+                    )
+                    
+                    # Evidenzia i campionati principali
+                    st.markdown("**📋 Copia questi ID per config.py:**")
+                    for l in results:
+                        name = l.get("league_name", "")
+                        country = l.get("country_name", "")
+                        lid = l.get("league_id", "")
+                        st.code(f"ID: {lid} - {name} ({country})", language=None)
+                else:
+                    st.warning("Nessuna lega trovata. Prova un'altra ricerca.")
+                    
+            except Exception as e:
+                st.error(f"Errore: {e}")
+
+# ============================================================
 # MAIN LOGIC
 # ============================================================
 if scan_btn:
@@ -249,19 +278,19 @@ if scan_btn:
 
     if not fixtures:
         st.warning(
-            f"⚠️ Nessuna partita pre-match trovata per il "
+            f"️ Nessuna partita pre-match trovata per il "
             f"**{scan_date.strftime('%d/%m/%Y')}**.\n\n"
             "Possibili cause:\n"
             "- Nessuna partita in programma\n"
             "- Partite già iniziate (lo script analizza solo pre-match)\n"
-            "- **ID leghe errati** (usa il pulsante 'Mostra Leghe Disponibili' per scoprire gli ID corretti)\n"
+            "- **ID leghe errati** (usa la sezione 'Scopri ID Leghe' qui sopra)\n"
             "- Stagione errata (verifica il parametro in sidebar)"
         )
         st.stop()
 
     total_placeholder.metric("Partite totali", len(fixtures))
     st.info(
-        f" Analisi di **{len(fixtures)} partite** in corso... "
+        f"🔄 Analisi di **{len(fixtures)} partite** in corso... "
         "(richiede ~2-3 minuti)"
     )
 
@@ -318,11 +347,9 @@ if scan_btn:
     if passed:
         st.success(f"🎯 **{len(passed)} partite superano TUTTI i 5 filtri!**")
 
-        # --- Tabella riassuntiva ---
         df = pd.DataFrame([r.to_dict() for r in passed])
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        # --- Dettaglio espandibile ---
         with st.expander(f"📋 Dettaglio completo ({len(passed)} partite)"):
             for r in passed:
                 with st.container(border=True):
@@ -339,16 +366,15 @@ if scan_btn:
                         elif v["pass"]:
                             icon = "✅"
                         else:
-                            icon = "❌"
+                            icon = ""
                         col.markdown(f"**{icon} {k}**\n\n{v['value']}")
 
-        # --- Invio Telegram ---
         st.divider()
         col_tg1, col_tg2, col_tg3 = st.columns([1, 1, 2])
         with col_tg1:
-            if st.button(" Invia su Telegram", type="primary", key="send_tg_btn"):
+            if st.button("📱 Invia su Telegram", type="primary", key="send_tg_btn"):
                 if not get_secret("TELEGRAM_BOT_TOKEN") or not get_secret("TELEGRAM_CHAT_ID"):
-                    st.error(" Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
+                    st.error("❌ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
                 else:
                     msg = build_message(passed)
                     if send_telegram(msg):
@@ -359,7 +385,6 @@ if scan_btn:
     else:
         st.warning("❌ Nessuna partita supera tutti i 5 filtri oggi.")
 
-        # --- Quasi qualificate (4/5 filtri) ---
         almost = [r for r in results if r.passed_count == 4]
         if almost:
             st.info(
@@ -376,12 +401,10 @@ if scan_btn:
                     f"{', '.join(failed) if failed else 'filtro skipped'}"
                 )
 
-    # --- Tutte le partite analizzate ---
-    with st.expander(f" Tutte le partite analizzate ({len(results)})"):
+    with st.expander(f"📊 Tutte le partite analizzate ({len(results)})"):
         df_all = pd.DataFrame([r.to_dict() for r in results])
         st.dataframe(df_all, use_container_width=True, hide_index=True)
 
-    # --- Debug panel ---
     with st.expander("🔎 Debug — risposta grezza API quote"):
         if raw_sample:
             st.json(raw_sample[0])
@@ -410,17 +433,16 @@ else:
     | 5 | Pareggio 3.40-4.30 | Finestra d'oro per il Lay the Draw |
 
     **Come iniziare:**
-    1. Usa il pulsante **"📋 Mostra Leghe Disponibili"** nella sidebar per scoprire gli ID corretti dei campionati
+    1. Espandi la sezione **"🔎 Scopri ID Leghe"** qui sotto per trovare gli ID corretti
     2. Configura i parametri nella sidebar a sinistra
     3. Usa il pulsante **"🔌 Testa Connessione API"** per verificare la chiave
-    4. Clicca su **"🔍 Avvia scansione"**
+    4. Clicca su **" Avvia scansione"**
     5. Ricevi le partite qualificate qui e su Telegram
 
     ⚠️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
     """
     )
 
-    # --- Status credenziali ---
     st.divider()
     st.subheader("🔐 Status configurazione")
 
