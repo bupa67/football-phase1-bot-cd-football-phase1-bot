@@ -270,3 +270,44 @@ def search_leagues(query: str = "") -> list:
         if query_lower in l.get("league_name", "").lower()
         or query_lower in l.get("country_name", "").lower()
     ]
+def debug_api_response(day: str, league_id: int) -> dict:
+    """
+    Chiama l'API e restituisce la risposta grezza per debug.
+    day: formato 'yyyy-mm-dd' (verrà convertito)
+    league_id: ID della lega
+    """
+    date_ddmmyyyy = _convert_date_format(day)
+    
+    key = get_secret("API_FOOTBALL_KEY")
+    params = {
+        "APIkey": key.strip(),
+        "action": "get_events",
+        "from": date_ddmmyyyy,
+        "to": date_ddmmyyyy,
+        "league_id": str(league_id)
+    }
+    
+    try:
+        r = requests.get(BASE_URL, params=params, timeout=20)
+        
+        result = {
+            "url": r.url.replace(key, "CHIAVE_NASCOSTA"),
+            "status_code": r.status_code,
+            "response_length": len(r.text),
+            "raw_response": r.text[:3000],  # Prime 3000 caratteri
+        }
+        
+        if r.status_code == 200:
+            try:
+                data = r.json()
+                result["parsed_data_count"] = len(data) if isinstance(data, list) else "non-list"
+                if isinstance(data, list) and len(data) > 0:
+                    # Mostra la prima partita come esempio
+                    result["sample_match"] = data[0]
+            except:
+                result["parse_error"] = "Non è JSON valido"
+        
+        return result
+        
+    except Exception as e:
+        return {"error": str(e)}
