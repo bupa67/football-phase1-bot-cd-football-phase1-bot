@@ -1,4 +1,4 @@
-"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con ricerca leghe."""
+"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con debug API."""
 from __future__ import annotations
 
 import streamlit as st
@@ -12,6 +12,7 @@ from api_client import (
     get_odds,
     get_available_leagues,
     search_leagues,
+    debug_api_response,
     ApiError,
     QuotaExceeded,
     test_api_connection,
@@ -43,7 +44,7 @@ with st.sidebar:
     api_key = get_secret("API_FOOTBALL_KEY")
     if not api_key:
         st.error(
-            "️ **API_FOOTBALL_KEY** non configurata.\n\n"
+            "⚠️ **API_FOOTBALL_KEY** non configurata.\n\n"
             "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud)."
         )
     else:
@@ -66,14 +67,14 @@ with st.sidebar:
     # --- Data e stagione ---
     scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
     season = st.number_input(
-        "🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
+        "️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
     )
 
     # --- Campionati ---
     cfg_temp = FilterConfig()
     league_options = list(cfg_temp.LEAGUES_NAMES.values())
     selected_leagues = st.multiselect(
-        "🏆 Campionati monitorati",
+        " Campionati monitorati",
         league_options,
         default=league_options,
         key="selected_leagues",
@@ -95,7 +96,7 @@ with st.sidebar:
     st.divider()
 
     # --- Filtro 1: Over 2.5 ---
-    st.subheader("📊 Filtro 1 - Over 2.5")
+    st.subheader(" Filtro 1 - Over 2.5")
     over25_max = st.number_input(
         "Quota max Over 2.5", 1.20, 2.50, 1.80, 0.05, key="over25_max"
     )
@@ -138,7 +139,7 @@ with st.sidebar:
     )
 
     if home_min >= home_max:
-        st.error(" Il limite minimo deve essere inferiore al massimo.")
+        st.error("❌ Il limite minimo deve essere inferiore al massimo.")
         st.stop()
 
     # --- Filtro 5: Pareggio ---
@@ -172,7 +173,7 @@ with st.sidebar:
     cfg.SEASON = int(season)
 
     st.divider()
-    st.caption("💡 Le modifiche si applicano al prossimo scan")
+    st.caption(" Le modifiche si applicano al prossimo scan")
 
 # ============================================================
 # HEADER
@@ -196,7 +197,7 @@ with col3:
     passed_placeholder.metric("✅ Qualificate", "-")
 
 # ============================================================
-# SEZIONE SCOPERTA LEGHE (nella pagina principale)
+# SEZIONE SCOPERTA LEGHE
 # ============================================================
 st.divider()
 with st.expander("🔎 Scopri ID Leghe (clicca per espandere)", expanded=False):
@@ -217,7 +218,6 @@ with st.expander("🔎 Scopri ID Leghe (clicca per espandere)", expanded=False):
     with col_search2:
         search_btn = st.button("🔍 Cerca", use_container_width=True, key="league_search_btn")
     
-    # Quick search buttons per i campionati principali
     st.markdown("**Ricerca rapida:**")
     quick_cols = st.columns(6)
     quick_searches = ["Premier", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Eredivisie"]
@@ -236,28 +236,18 @@ with st.expander("🔎 Scopri ID Leghe (clicca per espandere)", expanded=False):
                 st.success(f"✅ Trovate {len(results)} leghe")
                 
                 if results:
-                    # Crea DataFrame per visualizzazione tabellare
                     df_leagues = pd.DataFrame([{
                         "ID": l.get("league_id", "N/A"),
                         "Campionato": l.get("league_name", "N/A"),
                         "Paese": l.get("country_name", "N/A"),
                     } for l in results])
                     
-                    # Mostra tabella ordinabile
                     st.dataframe(
                         df_leagues,
                         use_container_width=True,
                         hide_index=True,
                         height=min(400, len(results) * 35 + 38)
                     )
-                    
-                    # Evidenzia i campionati principali
-                    st.markdown("**📋 Copia questi ID per config.py:**")
-                    for l in results:
-                        name = l.get("league_name", "")
-                        country = l.get("country_name", "")
-                        lid = l.get("league_id", "")
-                        st.code(f"ID: {lid} - {name} ({country})", language=None)
                 else:
                     st.warning("Nessuna lega trovata. Prova un'altra ricerca.")
                     
@@ -278,7 +268,7 @@ if scan_btn:
 
     if not fixtures:
         st.warning(
-            f"️ Nessuna partita pre-match trovata per il "
+            f"⚠️ Nessuna partita pre-match trovata per il "
             f"**{scan_date.strftime('%d/%m/%Y')}**.\n\n"
             "Possibili cause:\n"
             "- Nessuna partita in programma\n"
@@ -286,6 +276,33 @@ if scan_btn:
             "- **ID leghe errati** (usa la sezione 'Scopri ID Leghe' qui sopra)\n"
             "- Stagione errata (verifica il parametro in sidebar)"
         )
+        
+        # --- PANNELLO DEBUG: sempre visibile quando non ci sono partite ---
+        st.divider()
+        st.subheader("🐛 DEBUG - Risposta API grezza")
+        st.caption("Usa questo pannello per capire cosa restituisce l'API")
+        
+        debug_league = st.selectbox(
+            "Seleziona una lega per il debug:",
+            options=selected_league_ids,
+            format_func=lambda x: cfg_temp.LEAGUES_NAMES.get(x, str(x)),
+            key="debug_league_select"
+        )
+        
+        if st.button(" Debug API per questa lega", use_container_width=True, key="debug_api_btn"):
+            with st.spinner("Chiamo l'API..."):
+                debug_result = debug_api_response(scan_date.isoformat(), debug_league)
+            
+            st.json(debug_result)
+            
+            if debug_result.get("parsed_data_count", 0) > 0:
+                st.success(f"✅ L'API ha restituito {debug_result['parsed_data_count']} partite!")
+                st.info("Il problema è nel codice di filtraggio, non nell'API.")
+            elif debug_result.get("status_code") == 200:
+                st.warning("L'API ha risposto 200 ma con 0 partite. Prova un'altra data.")
+            else:
+                st.error("L'API ha restituito un errore.")
+        
         st.stop()
 
     total_placeholder.metric("Partite totali", len(fixtures))
@@ -366,13 +383,13 @@ if scan_btn:
                         elif v["pass"]:
                             icon = "✅"
                         else:
-                            icon = ""
+                            icon = "❌"
                         col.markdown(f"**{icon} {k}**\n\n{v['value']}")
 
         st.divider()
         col_tg1, col_tg2, col_tg3 = st.columns([1, 1, 2])
         with col_tg1:
-            if st.button("📱 Invia su Telegram", type="primary", key="send_tg_btn"):
+            if st.button(" Invia su Telegram", type="primary", key="send_tg_btn"):
                 if not get_secret("TELEGRAM_BOT_TOKEN") or not get_secret("TELEGRAM_CHAT_ID"):
                     st.error("❌ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
                 else:
@@ -383,7 +400,7 @@ if scan_btn:
                         st.error("❌ Errore invio. Controlla le credenziali Telegram.")
 
     else:
-        st.warning("❌ Nessuna partita supera tutti i 5 filtri oggi.")
+        st.warning(" Nessuna partita supera tutti i 5 filtri oggi.")
 
         almost = [r for r in results if r.passed_count == 4]
         if almost:
@@ -401,7 +418,7 @@ if scan_btn:
                     f"{', '.join(failed) if failed else 'filtro skipped'}"
                 )
 
-    with st.expander(f"📊 Tutte le partite analizzate ({len(results)})"):
+    with st.expander(f" Tutte le partite analizzate ({len(results)})"):
         df_all = pd.DataFrame([r.to_dict() for r in results])
         st.dataframe(df_all, use_container_width=True, hide_index=True)
 
@@ -436,7 +453,7 @@ else:
     1. Espandi la sezione **"🔎 Scopri ID Leghe"** qui sotto per trovare gli ID corretti
     2. Configura i parametri nella sidebar a sinistra
     3. Usa il pulsante **"🔌 Testa Connessione API"** per verificare la chiave
-    4. Clicca su **" Avvia scansione"**
+    4. Clicca su **"🔍 Avvia scansione"**
     5. Ricevi le partite qualificate qui e su Telegram
 
     ⚠️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
