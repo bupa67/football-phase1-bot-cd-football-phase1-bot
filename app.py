@@ -1,4 +1,4 @@
-"""Football Phase 1 Analyzer - Interfaccia Streamlit completa."""
+"""Football Phase 1 Analyzer - Interfaccia Streamlit completa con diagnostica."""
 from __future__ import annotations
 
 import streamlit as st
@@ -7,7 +7,7 @@ from datetime import date
 from dotenv import load_dotenv
 
 from config import FilterConfig
-from api_client import get_fixtures_today, get_odds, ApiError, QuotaExceeded
+from api_client import get_fixtures_today, get_odds, ApiError, QuotaExceeded, test_api_connection
 from filters import analyze_fixture, FilterResult
 from telegram_bot import send_telegram, build_message
 from credentials import get_secret
@@ -25,16 +25,32 @@ st.set_page_config(
 )
 
 # ============================================================
-# SIDEBAR: configurazione filtri
+# SIDEBAR: configurazione filtri e diagnostica
 # ============================================================
 with st.sidebar:
     st.title("⚙️ Parametri Filtri")
     st.caption("Modifica i valori per adattare la strategia")
 
     # --- Verifica credenziali ---
-    if not get_secret("API_FOOTBALL_KEY"):
-        st.warning("⚠️ **API_FOOTBALL_KEY** non configurata.\n\n"
-                   "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud).")
+    api_key = get_secret("API_FOOTBALL_KEY")
+    if not api_key:
+        st.error("️ **API_FOOTBALL_KEY** non configurata.\n\n"
+                 "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud).")
+    else:
+        st.success(f"✅ API Key caricata: `{api_key[:6]}...{api_key[-4:]}`")
+
+    # --- Diagnostica API ---
+    st.divider()
+    st.subheader("🔧 Diagnostica")
+    if st.button("🔌 Testa Connessione API", use_container_width=True, key="test_api_btn"):
+        with st.spinner("Testo la chiave API..."):
+            result = test_api_connection()
+        if result.startswith("✅"):
+            st.success(result)
+        else:
+            st.error(result)
+
+    st.divider()
 
     # --- Data e stagione ---
     scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
@@ -68,7 +84,7 @@ with st.sidebar:
     st.divider()
 
     # --- Filtro 1: Over 2.5 ---
-    st.subheader("📊 Filtro 1 - Over 2.5")
+    st.subheader(" Filtro 1 - Over 2.5")
     over25_max = st.number_input(
         "Quota max Over 2.5", 1.20, 2.50, 1.80, 0.05, key="over25_max"
     )
@@ -150,7 +166,7 @@ with st.sidebar:
 # ============================================================
 # HEADER
 # ============================================================
-st.title("⚽ Football Phase 1 Analyzer")
+st.title(" Football Phase 1 Analyzer")
 st.caption(
     f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • "
     "Strategia Lay the Draw / Over 2.5"
@@ -255,10 +271,10 @@ if scan_btn:
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         # --- Dettaglio espandibile ---
-        with st.expander(f"📋 Dettaglio completo ({len(passed)} partite)"):
+        with st.expander(f" Dettaglio completo ({len(passed)} partite)"):
             for r in passed:
                 with st.container(border=True):
-                    st.subheader(f"⚽ {r.home} vs {r.away}")
+                    st.subheader(f" {r.home} vs {r.away}")
                     st.caption(
                         f"{r.league} • {r.kickoff[:16]} • "
                         f"Bookmaker: {r.bookmaker or 'n/d'}"
@@ -343,16 +359,17 @@ else:
 
     **Come iniziare:**
     1. Configura i parametri nella sidebar a sinistra
-    2. Clicca su **"🔍 Avvia scansione"**
-    3. Ricevi le partite qualificate qui e su Telegram
+    2. Usa il pulsante **" Testa Connessione API"** per verificare la chiave
+    3. Clicca su **"🔍 Avvia scansione"**
+    4. Ricevi le partite qualificate qui e su Telegram
 
-    ⚠️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
+    ️ *Ricorda: questa è solo la Fase 1. Le partite qualificate vanno poi verificate con le formazioni (Fase 2) e monitorate in live (Fase 3).*
     """
     )
 
     # --- Status credenziali ---
     st.divider()
-    st.subheader("🔐 Status configurazione")
+    st.subheader(" Status configurazione")
 
     col1, col2, col3 = st.columns(3)
     with col1:
