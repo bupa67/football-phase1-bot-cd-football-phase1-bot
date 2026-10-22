@@ -251,3 +251,9 @@ def test_api_connection() -> str:
         
     except Exception as e:
         return f"❌ Eccezione: {str(e)}"
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_available_leagues() -> list:
+    """Recupera la lista di tutte le leghe disponibili su apifootball.com."""
+    raw = _api_request("get_leagues", {})
+    return raw
