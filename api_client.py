@@ -1,9 +1,9 @@
-"""Client per API-Football.com (apifootball.com) con normalizzazione dati."""
+"""Client per API-Football.com (apifootball.com) con debug avanzato."""
 from __future__ import annotations
 
 import time
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -14,6 +14,9 @@ from credentials import get_secret
 
 BASE_URL = "https://apiv3.apifootball.com/"
 logger = logging.getLogger(__name__)
+
+# Configura logging per mostrare i messaggi anche su Streamlit Cloud
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 _last_call = 0.0
 
@@ -35,11 +38,12 @@ def _get_params() -> dict:
             "Locale: controlla il file .env\n"
             "Cloud: Settings → Secrets → salva e fai Restart app"
         )
+    # NOTA: apifootball.com richiede ESATTAMENTE "APIkey" (case-sensitive)
     return {"APIkey": key.strip()}
 
 
 def _api_request(action: str, params: dict) -> list:
-    """Esegue richiesta HTTP a apifootball.com con rate limiting."""
+    """Esegue richiesta HTTP a apifootball.com con debug completo."""
     global _last_call
     wait = 1.2 - (time.monotonic() - _last_call)
     if wait > 0:
@@ -48,34 +52,52 @@ def _api_request(action: str, params: dict) -> list:
 
     req_params = {**_get_params(), "action": action, **params}
     
+    # Costruiamo l'URL completo per il debug (così vediamo se c'è un errore di battitura)
+    query_string = "&".join([f"{k}={v}" for k, v in req_params.items()])
+    full_url = f"{BASE_URL.rstrip('/')}?{query_string}"
+    
+    # Mascheriamo la chiave API nel log per sicurezza
+    safe_url = full_url.replace(req_params["APIkey"], "CHIAVE_NASCOSTA")
+    logger.info(f"🔗 URL Richiesta: {safe_url}")
+    
     try:
         r = requests.get(BASE_URL, params=req_params, timeout=20)
-        r.raise_for_status()
+        logger.info(f"📥 Status Code: {r.status_code}")
+        logger.info(f"📄 Raw Response: {r.text[:1000]}")  # Prime 1000 caratteri
+        
+        if r.status_code != 200:
+            raise ApiError(f"Errore HTTP {r.status_code}: {r.text}")
+            
         payload = r.json()
         
-        # apifootball restituisce un array, ma in caso di errore a volte restituisce {"error": "..."}
+        # apifootball a volte restituisce {"error": "messaggio"} invece di una lista
         if isinstance(payload, dict) and "error" in payload:
-            err_msg = str(payload["error"]).lower()
-            if "invalid api key" in err_msg or "wrong api key" in err_msg:
-                raise ApiError("Chiave API non valida. Controlla la dashboard di apifootball.com")
-            raise ApiError(f"Errore API: {payload['error']}")
+            err_msg = str(payload["error"])
+            logger.error(f"❌ Errore dal server API: {err_msg}")
+            
+            if "invalid api key" in err_msg.lower() or "wrong api key" in err_msg.lower():
+                raise ApiError(
+                    "Chiave API non valida.\n"
+                    "1. Vai su https://apifootball.com/admin/\n"
+                    "2. Copia la chiave ESATTAMENTE come appare (no spazi)\n"
+                    "3. Su Streamlit Cloud: ricorda le virgolette \" \" nei Secrets e fai Restart app"
+                )
+            raise ApiError(f"Errore API: {err_msg}")
             
         return payload if isinstance(payload, list) else []
         
     except requests.RequestException as exc:
+        logger.error(f"💥 Errore di rete: {exc}")
         raise ApiError(f"Errore di rete: {exc}") from exc
     except ValueError:
+        logger.error(f"❌ Risposta non JSON: {r.text}")
         raise ApiError("Risposta API non valida (non JSON)")
 
 
 # ----------------------------------------------------------------------
 # NORMALIZZAZIONE DATI
-# Trasforma il formato piatto di apifootball.com nel formato annidato 
-# che filters.py e app.py si aspettano.
 # ----------------------------------------------------------------------
 def _normalize_match(m: dict) -> dict:
-    """Converte il formato apifootball nel formato standardizzato."""
-    # Gestione sicura dei punteggi (a volte sono stringhe vuote "")
     def safe_int(val):
         try:
             return int(val) if val not in ("", None, "?") else None
@@ -87,7 +109,6 @@ def _normalize_match(m: dict) -> dict:
     ht_h = safe_int(m.get("match_hometeam_halftime_score"))
     ht_a = safe_int(m.get("match_awayteam_halftime_score"))
 
-    # Apifootball usa "Finished", "Not Started", "Halftime", ecc.
     status_raw = m.get("match_status", "NS")
     status_map = {"Finished": "FT", "Not Started": "NS", "Halftime": "HT", "Cancelled": "CANC"}
     status = status_map.get(status_raw, status_raw[:2].upper() if status_raw else "NS")
@@ -96,7 +117,7 @@ def _normalize_match(m: dict) -> dict:
         "fixture": {
             "id": int(m.get("match_id", 0)),
             "date": f"{m.get('match_date', '')} {m.get('match_time', '')}".strip(),
-            "timestamp": None,  # Apifootball non lo fornisce direttamente, useremo la data
+            "timestamp": None,
             "status": {"short": status},
         },
         "league": {
@@ -120,8 +141,6 @@ def _normalize_match(m: dict) -> dict:
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
 def _fixtures_cached(date_str: str, league_ids: tuple) -> list:
-    """Recupera le partite di una specifica data per una lista di leghe."""
-    # Apifootball richiede from e to. Per un singolo giorno, sono uguali.
     raw = _api_request("get_events", {
         "from": date_str,
         "to": date_str,
@@ -137,9 +156,8 @@ def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _odds_cached(match_id: int) -> list:
-    """Recupera le quote per una specifica partita."""
     raw = _api_request("get_odds", {"match_id": str(match_id)})
-    return raw  # Ritorniamo raw, lo parseremo in extract_odds
+    return raw
 
 
 def get_odds(fixture_id: int) -> list:
@@ -148,37 +166,28 @@ def get_odds(fixture_id: int) -> list:
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def _history_cached(team_id: int, from_date: str, to_date: str) -> list:
-    """Recupera lo storico partite di una squadra in un range di date."""
     raw = _api_request("get_events", {
         "team_id": str(team_id),
         "from": from_date,
         "to": to_date
     })
-    # Filtriamo solo le partite finite
     return [_normalize_match(m) for m in raw if m.get("fixture", {}).get("status", {}).get("short") == "FT"]
 
 
 def get_team_last_matches(team_id: int, league_id: int, season: int, last: int = 20) -> list:
-    """Recupera le ultime N partite. Usiamo un range di 4 mesi per sicurezza."""
     today = date.today()
     from_date = (today - timedelta(days=120)).isoformat()
     to_date = today.isoformat()
     
     all_finished = _history_cached(int(team_id), from_date, to_date)
-    # Ordiniamo per data decrescente (più recenti prima) e prendiamo le ultime N
-    # Nota: la data è "YYYY-MM-DD HH:MM", l'ordinamento stringa funziona
     sorted_matches = sorted(all_finished, key=lambda x: x["fixture"]["date"], reverse=True)
     return sorted_matches[:last]
 
 
 # ----------------------------------------------------------------------
-# PARSING QUOTE (Specifico per apifootball.com)
+# PARSING QUOTE
 # ----------------------------------------------------------------------
 def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
-    """
-    Estrae le quote dal formato specifico di apifootball.com.
-    odds_data è una lista con un elemento: [{"match_id": "123", "odd_bookmakers": [...]}]
-    """
     if not odds_data:
         return {"home": None, "draw": None, "away": None, "over25": None}, ""
 
@@ -200,17 +209,12 @@ def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
     def complete(p: dict) -> bool:
         return all(p.get(k) is not None and p.get(k) > 1.0 for k in ("home", "draw", "away"))
 
-    # 1) Cerca bookmaker preferito completo
     for name in preferred:
         if name in parsed and complete(parsed[name]):
             return parsed[name], name
-            
-    # 2) Cerca qualsiasi bookmaker completo
     for name, p in parsed.items():
         if complete(p):
             return p, name
-            
-    # 3) Fallback parziale
     for name in preferred:
         if name in parsed:
             return parsed[name], name
