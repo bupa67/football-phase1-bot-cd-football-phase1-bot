@@ -235,28 +235,31 @@ with st.expander(" DEBUG API - Testa una lega specifica", expanded=True):
     with debug_col3:
         debug_btn = st.button("🔍 Testa API", use_container_width=True, key="debug_api_btn_main")
     
-    if debug_btn:
-        with st.spinner("Chiamo l'API..."):
+        if debug_btn:
+        with st.spinner("Chiamo l'API in due modalità..."):
             debug_result = debug_api_response(debug_date.isoformat(), debug_league)
         
-        # Mostra risultato in modo chiaro
-        st.subheader("Risultato:")
+        st.subheader("Risultato del Test:")
         
-        status = debug_result.get("status_code")
-        count = debug_result.get("parsed_data_count", 0)
-        
-        # FIX: usiamo isinstance per evitare il crash se count è una stringa
-        if status == 200 and isinstance(count, int) and count > 0:
-            st.success(f"✅ API OK! Restituite **{count} partite** per {cfg_temp.LEAGUES_NAMES.get(debug_league, 'lega')}")
-            st.info("Se qui vedi partite ma la scansione principale no, il problema è nel filtraggio.")
-        elif status == 200:
-            st.warning(f"⚠️ API ha risposto OK ma **0 partite** trovate per questa data/lega.")
-            st.info("Prova con un'altra data (es. domenica scorsa) o un'altra lega.")
+        # Mostra risultato CON league_id
+        st.markdown("#### 1️⃣ Test CON league_id")
+        res_with = debug_result.get("CON league_id", {})
+        if res_with.get("status_code") == 200 and isinstance(res_with.get("parsed_data_count"), int) and res_with["parsed_data_count"] > 0:
+            st.success(f"✅ Funziona! Trovate {res_with['parsed_data_count']} partite.")
         else:
-            st.error(f"❌ Errore API: status {status}")
+            st.error(f"❌ Fallito. Risposta: `{res_with.get('raw_error', res_with.get('raw_response', 'Errore sconosciuto'))}`")
+            
+        # Mostra risultato SENZA league_id
+        st.markdown("#### 2️⃣ Test SENZA league_id (solo data)")
+        res_without = debug_result.get("SENZA league_id", {})
+        if res_without.get("status_code") == 200 and isinstance(res_without.get("parsed_data_count"), int) and res_without["parsed_data_count"] > 0:
+            st.success(f"✅ Funziona! Trovate {res_without['parsed_data_count']} partite in totale quel giorno.")
+            st.info("💡 **Conclusione**: Il tuo piano API non supporta il filtro `league_id` insieme alle date, oppure l'ID è sbagliato. Dobbiamo filtrare i dati in Python dopo averli scaricati tutti.")
+        else:
+            st.warning(f"⚠️ Anche questo ha fallito. Risposta: `{res_without.get('raw_error', res_without.get('raw_response', 'Errore sconosciuto'))}`")
+            st.info("💡 **Conclusione**: Probabilmente la data **{debug_date.strftime('%d-%m-%Y')}** non ha partite nel database. Prova con una data passata come **18-10-2023** o **18-10-2024**.")
         
-        # Mostra risposta grezza
-        with st.expander("📄 Risposta grezza JSON (clicca per espandere)"):
+        with st.expander("📄 Risposta grezza JSON completa"):
             st.json(debug_result)
 
 # ============================================================
