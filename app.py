@@ -51,6 +51,29 @@ with st.sidebar:
             st.error(result)
 
     st.divider()
+        st.divider()
+    
+    if st.button("📋 Mostra Leghe Disponibili", use_container_width=True, key="show_leagues_btn"):
+        with st.spinner("Recupero lista leghe..."):
+            try:
+                leagues = get_available_leagues()
+                st.success(f"✅ Trovate {len(leagues)} leghe")
+                
+                # Filtra solo i campionati europei principali per facilitare la ricerca
+                target_names = ["premier", "la liga", "bundesliga", "serie a", "ligue 1", "eredivisie"]
+                filtered = [l for l in leagues if any(t in l.get("league_name", "").lower() for t in target_names)]
+                
+                if filtered:
+                    st.write(f"**Campionati principali trovati:**")
+                    for l in filtered:
+                        st.write(f"• ID: `{l.get('league_id')}` - {l.get('league_name')} ({l.get('country_name')})")
+                else:
+                    st.warning("Nessun campionato principale trovato. Mostra tutti:")
+                    for l in leagues[:20]:  # Prime 20 leghe
+                        st.write(f"• ID: `{l.get('league_id')}` - {l.get('league_name')}")
+                        
+            except Exception as e:
+                st.error(f"Errore: {e}")
 
     # --- Data e stagione ---
     scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
