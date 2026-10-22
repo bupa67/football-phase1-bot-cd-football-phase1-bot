@@ -1,4 +1,4 @@
-"""Configurazione centrale dei filtri Fase 1 (Compatibile con apifootball.com)."""
+"""Configurazione centrale dei filtri Fase 1 (ID corretti per apifootball.com)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -32,22 +32,22 @@ class FilterConfig:
     draw_max_odds: float = 4.30
 
     # ==========================================================
-    # ID CAMPIONATI SPECIFICI DI APIFOOTBALL.COM
+    # ID CAMPIONATI REALI DI APIFOOTBALL.COM (verificati)
     # ==========================================================
     LEAGUES: List[int] = field(
-        default_factory=lambda: [152, 302, 175, 207, 168, 266]
+        default_factory=lambda: [152, 302, 175, 207, 168, 244]
     )
     LEAGUES_NAMES: Dict[int, str] = field(
         default_factory=lambda: {
-            152: "Premier League",
-            302: "La Liga",
-            175: "Bundesliga",
-            207: "Serie A",
-            168: "Ligue 1",
-            266: "Eredivisie",
+            152: "Premier League",       # England
+            302: "La Liga",              # Spain
+            175: "Bundesliga",           # Germany
+            207: "Serie A",              # Italy
+            168: "Ligue 1",              # France
+            244: "Eredivisie",           # Netherlands
         }
     )
     PREFERRED_BOOKMAKERS: List[str] = field(
         default_factory=lambda: ["Bet365", "1xBet", "Pinnacle", "Betfair"]
     )
-    SEASON: int = 2026  # Non strettamente usato da apifootball, ma mantenuto per compatibilità
+    SEASON: int = 2026
