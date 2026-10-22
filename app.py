@@ -1,4 +1,4 @@
-"""Football Phase 1 Analyzer - Versione con session_state per debug persistente."""
+"""Football Phase 1 Analyzer - Versione con session_state e debug dual."""
 from __future__ import annotations
 
 import streamlit as st
@@ -52,17 +52,12 @@ with st.sidebar:
     st.title("⚙️ Parametri Filtri")
     st.caption("Modifica i valori per adattare la strategia")
 
-    # --- Verifica credenziali ---
     api_key = get_secret("API_FOOTBALL_KEY")
     if not api_key:
-        st.error(
-            "⚠️ **API_FOOTBALL_KEY** non configurata.\n\n"
-            "Configura `.env` (locale) o **Settings → Secrets** (Streamlit Cloud)."
-        )
+        st.error("⚠️ **API_FOOTBALL_KEY** non configurata.\n\nConfigura `.env` o **Settings → Secrets**.")
     else:
         st.success(f"✅ API Key caricata: `{api_key[:6]}...{api_key[-4:]}`")
 
-    # --- Diagnostica API ---
     st.divider()
     st.subheader("🔧 Diagnostica")
 
@@ -76,13 +71,9 @@ with st.sidebar:
 
     st.divider()
 
-    # --- Data e stagione ---
     scan_date = st.date_input("📅 Data partite", value=date.today(), key="scan_date")
-    season = st.number_input(
-        "🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season"
-    )
+    season = st.number_input("🗓️ Stagione API-Football", 2020, 2035, value=2026, step=1, key="season")
 
-    # --- Campionati ---
     cfg_temp = FilterConfig()
     league_options = list(cfg_temp.LEAGUES_NAMES.values())
     selected_leagues = st.multiselect(
@@ -100,30 +91,22 @@ with st.sidebar:
     name_to_id = {v: k for k, v in cfg_temp.LEAGUES_NAMES.items()}
     selected_league_ids = [name_to_id[n] for n in selected_leagues]
 
-    st.caption(
-        f"ℹ️ **Piano free ≈ 100 req/giorno**: con {len(selected_leagues)} leghe, "
-        "una scan completa può esaurire la quota giornaliera."
-    )
-
+    st.caption(f"ℹ️ **Piano free ≈ 100 req/giorno**: con {len(selected_leagues)} leghe, una scan completa può esaurire la quota.")
     st.divider()
 
-    # --- Filtro 1: Over 2.5 ---
     st.subheader("📊 Filtro 1 - Over 2.5")
     over25_max = st.number_input("Quota max Over 2.5", 1.20, 2.50, 1.80, 0.05, key="over25_max")
     use_avg = st.checkbox("Accetta anche Media Gol > soglia", value=True, key="use_avg")
     avg_goals_min = st.number_input("Media gol minima (alternativa)", 2.0, 3.5, 2.6, 0.1, key="avg_goals_min")
 
-    # --- Filtro 2: 0-0 storici ---
     st.subheader("🚫 Filtro 2 - 0-0 storici")
     zero_zero_pct = st.slider("Frequenza max 0-0 (%)", 0, 30, 10, key="zero_zero_pct")
     zero_zero_n = st.number_input("Campione partite (Filtro 2)", 10, 30, 20, key="zero_zero_n")
 
-    # --- Filtro 3: Gol 1° Tempo ---
     st.subheader("⚽ Filtro 3 - Gol 1° Tempo")
     ht_pct = st.slider("Min % Over 0.5 1HT", 50, 90, 70, key="ht_pct")
     ht_n = st.number_input("Campione partite (Filtro 3)", 10, 30, 20, key="ht_n")
 
-    # --- Filtro 4: Favorita in casa ---
     st.subheader("🏠 Filtro 4 - Favorita in casa")
     home_min = st.number_input("Quota min casa", 1.10, 2.00, 1.40, 0.05, key="home_min")
     home_max = st.number_input("Quota max casa", 1.20, 2.50, 1.85, 0.05, key="home_max")
@@ -132,7 +115,6 @@ with st.sidebar:
         st.error("❌ Il limite minimo deve essere inferiore al massimo.")
         st.stop()
 
-    # --- Filtro 5: Pareggio ---
     st.subheader("🤝 Filtro 5 - Pareggio")
     draw_min = st.number_input("Quota min pareggio", 2.50, 4.00, 3.40, 0.05, key="draw_min")
     draw_max = st.number_input("Quota max pareggio", 3.50, 5.00, 4.30, 0.05, key="draw_max")
@@ -141,7 +123,6 @@ with st.sidebar:
         st.error("❌ Il limite minimo deve essere inferiore al massimo.")
         st.stop()
 
-    # --- Costruzione config finale ---
     cfg = FilterConfig(
         over25_max_odds=over25_max,
         avg_goals_min=avg_goals_min,
@@ -164,17 +145,12 @@ with st.sidebar:
 # ============================================================
 # HEADER
 # ============================================================
-st.title(" Football Phase 1 Analyzer")
-st.caption(
-    f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • "
-    "Strategia Lay the Draw / Over 2.5"
-)
+st.title("⚽ Football Phase 1 Analyzer")
+st.caption(f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • Strategia Lay the Draw / Over 2.5")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    scan_btn = st.button(
-        "🔍 Avvia scansione", type="primary", use_container_width=True, key="scan_btn"
-    )
+    scan_btn = st.button("🔍 Avvia scansione", type="primary", use_container_width=True, key="scan_btn")
 with col2:
     total_placeholder = st.empty()
     if st.session_state.last_fixtures is not None:
@@ -190,7 +166,7 @@ with col3:
         passed_placeholder.metric("✅ Qualificate", "-")
 
 # ============================================================
-# LOGICA SCANSIONE (usa session_state)
+# LOGICA SCANSIONE
 # ============================================================
 if scan_btn:
     st.session_state.scan_in_progress = True
@@ -208,14 +184,14 @@ if scan_btn:
     st.session_state.scan_in_progress = False
 
 # ============================================================
-# PANNELLO DEBUG (SEMPRE VISIBILE, indipendente dalla scansione)
+# PANNELLO DEBUG
 # ============================================================
 st.divider()
-with st.expander(" DEBUG API - Testa una lega specifica", expanded=True):
+with st.expander("🐛 DEBUG API - Testa una lega specifica", expanded=True):
     st.markdown("""
     **Istruzioni:**
     1. Seleziona una lega
-    2. Imposta una data (es. 25/10/2026 o una data passata come 18/10/2026)
+    2. Imposta una data (default: 18/10/2023, una data passata sicura)
     3. Clicca "Testa API" per vedere la risposta grezza
     """)
     
@@ -230,18 +206,17 @@ with st.expander(" DEBUG API - Testa una lega specifica", expanded=True):
         )
     
     with debug_col2:
-        debug_date = st.date_input("Data da testare:", value=date(2026, 10, 25), key="debug_date_select")
+        debug_date = st.date_input("Data da testare:", value=date(2023, 10, 18), key="debug_date_select")
     
     with debug_col3:
         debug_btn = st.button("🔍 Testa API", use_container_width=True, key="debug_api_btn_main")
     
-        if debug_btn:
+    if debug_btn:
         with st.spinner("Chiamo l'API in due modalità..."):
             debug_result = debug_api_response(debug_date.isoformat(), debug_league)
         
         st.subheader("Risultato del Test:")
         
-        # Mostra risultato CON league_id
         st.markdown("#### 1️⃣ Test CON league_id")
         res_with = debug_result.get("CON league_id", {})
         if res_with.get("status_code") == 200 and isinstance(res_with.get("parsed_data_count"), int) and res_with["parsed_data_count"] > 0:
@@ -249,34 +224,29 @@ with st.expander(" DEBUG API - Testa una lega specifica", expanded=True):
         else:
             st.error(f"❌ Fallito. Risposta: `{res_with.get('raw_error', res_with.get('raw_response', 'Errore sconosciuto'))}`")
             
-        # Mostra risultato SENZA league_id
         st.markdown("#### 2️⃣ Test SENZA league_id (solo data)")
         res_without = debug_result.get("SENZA league_id", {})
         if res_without.get("status_code") == 200 and isinstance(res_without.get("parsed_data_count"), int) and res_without["parsed_data_count"] > 0:
             st.success(f"✅ Funziona! Trovate {res_without['parsed_data_count']} partite in totale quel giorno.")
-            st.info("💡 **Conclusione**: Il tuo piano API non supporta il filtro `league_id` insieme alle date, oppure l'ID è sbagliato. Dobbiamo filtrare i dati in Python dopo averli scaricati tutti.")
+            st.info("💡 **Conclusione**: Il tuo piano API potrebbe non supportare il filtro `league_id` insieme alle date. Dobbiamo filtrare i dati in Python dopo averli scaricati tutti.")
         else:
             st.warning(f"⚠️ Anche questo ha fallito. Risposta: `{res_without.get('raw_error', res_without.get('raw_response', 'Errore sconosciuto'))}`")
-            st.info("💡 **Conclusione**: Probabilmente la data **{debug_date.strftime('%d-%m-%Y')}** non ha partite nel database. Prova con una data passata come **18-10-2023** o **18-10-2024**.")
+            st.info(f"💡 **Conclusione**: Probabilmente la data **{debug_date.strftime('%d-%m-%Y')}** non ha partite nel database. Prova con un'altra data passata.")
         
         with st.expander("📄 Risposta grezza JSON completa"):
             st.json(debug_result)
 
 # ============================================================
-# MOSTRA RISULTATI SCANSIONE (da session_state)
+# MOSTRA RISULTATI SCANSIONE
 # ============================================================
 if st.session_state.last_fixtures is not None:
     fixtures = st.session_state.last_fixtures
     
     if not fixtures:
-        st.warning(
-            f"⚠️ Nessuna partita trovata per il **{st.session_state.last_scan_date}**.\n\n"
-            "Usa il pannello DEBUG qui sopra per testare singole leghe."
-        )
+        st.warning(f"⚠️ Nessuna partita trovata per il **{st.session_state.last_scan_date}**.\n\nUsa il pannello DEBUG qui sopra per testare singole leghe.")
     else:
         st.success(f"✅ Trovate **{len(fixtures)} partite**! Avvia l'analisi...")
         
-        # Esegui analisi se non è già stata fatta
         if st.session_state.last_results is None:
             with st.spinner(f"Analisi di {len(fixtures)} partite in corso..."):
                 progress = st.progress(0)
@@ -293,13 +263,12 @@ if st.session_state.last_fixtures is not None:
                             raw_sample = odds_data
                         result = analyze_fixture(fx, odds_data, cfg)
                         results.append(result)
-                    except Exception as e:
+                    except Exception:
                         continue
                 
                 progress.empty()
                 st.session_state.last_results = results
         
-        # Mostra risultati
         results = st.session_state.last_results
         passed = [r for r in results if r.passed]
         
@@ -323,7 +292,7 @@ if st.session_state.last_fixtures is not None:
             st.divider()
             if st.button("📱 Invia su Telegram", type="primary", key="send_tg_btn"):
                 if not get_secret("TELEGRAM_BOT_TOKEN") or not get_secret("TELEGRAM_CHAT_ID"):
-                    st.error("️ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
+                    st.error("❌ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
                 else:
                     msg = build_message(passed)
                     if send_telegram(msg):
@@ -334,12 +303,11 @@ if st.session_state.last_fixtures is not None:
             st.warning("❌ Nessuna partita supera tutti i 5 filtri.")
             almost = [r for r in results if r.passed_count == 4]
             if almost:
-                st.info(f" **{len(almost)} partite** con 4/5 filtri:")
+                st.info(f"💡 **{len(almost)} partite** con 4/5 filtri:")
                 for r in almost:
                     failed = [k for k, v in r.filters.items() if not v["pass"] and not v.get("skipped")]
                     st.write(f"• **{r.home} vs {r.away}** — fallisce: {', '.join(failed)}")
         
-        # Reset button
         st.divider()
         if st.button("🔄 Nuova scansione (reset)", key="reset_btn"):
             st.session_state.last_fixtures = None
@@ -347,16 +315,13 @@ if st.session_state.last_fixtures is not None:
             st.rerun()
 
 else:
-    # Schermata iniziale
     st.markdown("""
     ### 👋 Benvenuto nel Football Phase 1 Analyzer
     
     **Come usare il DEBUG:**
     1. Espandi il pannello "🐛 DEBUG API" qui sopra
     2. Seleziona una lega (es. Premier League)
-    3. Imposta una data (prova **18/10/2026** - domenica scorsa)
+    3. Lascia la data di default (**18/10/2023**)
     4. Clicca "🔍 Testa API"
     5. Dimmi cosa vedi!
-    
-    Questo ci aiuterà a capire se l'API restituisce dati o no.
     """)
