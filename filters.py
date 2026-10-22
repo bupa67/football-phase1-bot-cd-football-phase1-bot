@@ -1,57 +1,86 @@
-"""Implementazione dei 5 filtri della Fase 1."""
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+"""I 5 filtri della Fase 1, con parsing difensivo e soglie corrette."""
+from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+
+from api_client import extract_odds, get_team_last_matches
 from config import FilterConfig
-from api_client import get_team_last_matches, extract_odds
 
 
 @dataclass
 class FilterResult:
-    """Risultato dell'analisi di una partita."""
     fixture_id: int
     home: str
     away: str
     league: str
     kickoff: str
     odds: Dict[str, Optional[float]] = field(default_factory=dict)
-    filters: Dict[str, Dict] = field(default_factory=dict)
+    filters: Dict[str, dict] = field(default_factory=dict)
+    bookmaker: str = ""
     passed: bool = False
     passed_count: int = 0
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
+        def fmt(key):
+            v = self.odds.get(key)
+            return f"{v:.2f}" if v is not None else "n/d"
+
         return {
             "Partita": f"{self.home} vs {self.away}",
             "Campionato": self.league,
-            "Odds Over 2.5": f"{self.odds.get('over25', '-')}",
-            "Odds Casa": f"{self.odds.get('home', '-')}",
-            "Odds Pareggio": f"{self.odds.get('draw', '-')}",
-            "Filtri superati": f"{self.passed_count}/5",
-            "✅": "SÌ" if self.passed else "NO",
+            "Bookmaker": self.bookmaker or "n/d",
+            "Over 2.5": fmt("over25"),
+            "Casa": fmt("home"),
+            "Pareggio": fmt("draw"),
+            "Filtri": f"{self.passed_count}/5",
+            "✅ Qualificata": "SÌ" if self.passed else "NO",
         }
 
 
-def _count_0_0(matches: List[Dict]) -> int:
-    count = 0
+def _record(r: FilterResult, key: str, value: str, ok: bool, skipped: bool = False):
+    r.filters[key] = {"value": value, "pass": bool(ok), "skipped": skipped}
+
+
+def _score(match: dict, period: str):
+    s = (match.get("score") or {}).get(period) or {}
+    h, a = s.get("home"), s.get("away")
+    if isinstance(h, int) and isinstance(a, int):
+        return h, a
+    return None
+
+
+def _team_stats(matches: list) -> dict:
+    n = zeros = ht = ht_n = total = 0
+
     for m in matches:
-        ft = m["score"]["fulltime"]
-        if ft["home"] == 0 and ft["away"] == 0:
-            count += 1
-    return count
+        ft = _score(m, "fulltime")
+        if ft is None:
+            continue
+        n += 1
+        total += ft[0] + ft[1]
+        if ft == (0, 0):
+            zeros += 1
+
+        half = _score(m, "halftime")
+        if half is not None:
+            ht_n += 1
+            if sum(half) > 0:
+                ht += 1
+
+    return {
+        "n": n,
+        "zeros": zeros,
+        "zero_pct": 100.0 * zeros / n if n else 100.0,
+        "ht": ht,
+        "ht_n": ht_n,
+        "ht_pct": 100.0 * ht / ht_n if ht_n else 0.0,
+        "avg_goals": total / n if n else 0.0,
+    }
 
 
-def _count_1ht_over05(matches: List[Dict]) -> int:
-    count = 0
-    for m in matches:
-        ht = m["score"]["halftime"]
-        if ht["home"] is not None and (ht["home"] + ht["away"]) >= 1:
-            count += 1
-    return count
-
-
-def analyze_fixture(fixture: Dict, odds_data: List[Dict], cfg: FilterConfig) -> FilterResult:
-    """Analizza un singolo fixture contro tutti i 5 filtri."""
-    result = FilterResult(
+def analyze_fixture(fixture: dict, odds_data: list, cfg: FilterConfig) -> FilterResult:
+    r = FilterResult(
         fixture_id=fixture["fixture"]["id"],
         home=fixture["teams"]["home"]["name"],
         away=fixture["teams"]["away"]["name"],
@@ -59,71 +88,87 @@ def analyze_fixture(fixture: Dict, odds_data: List[Dict], cfg: FilterConfig) -> 
         kickoff=fixture["fixture"]["date"],
     )
 
-    # Estrazione quote
-    odds = extract_odds(odds_data, cfg.PREFERRED_BOOKMAKERS)
-    result.odds = odds
-    if not all(v is not None for v in odds.values()):
-        result.filters["quote"] = {"value": "N/D", "pass": False, "msg": "Quote incomplete"}
-        return result
+    odds, bookmaker = extract_odds(odds_data, cfg.PREFERRED_BOOKMAKERS)
+    r.odds, r.bookmaker = odds, bookmaker
 
-    # === FILTRO 1: Over 2.5 <= 1.80 ===
-    f1_pass = odds["over25"] <= cfg.over25_max_odds
-    result.filters["F1_Over 2.5"] = {
-        "value": f"{odds['over25']:.2f} (≤ {cfg.over25_max_odds})",
-        "pass": f1_pass,
-    }
+    if any(odds.get(k) is None for k in ("home", "draw", "away")):
+        _record(r, "Quote", "non disponibili", False)
+        return r
 
-    # === FILTRO 4: Favorita in casa 1.40 - 1.85 ===
-    fav_is_home = odds["home"] < odds["away"]
-    f4_pass = fav_is_home and cfg.home_fav_min_odds <= odds["home"] <= cfg.home_fav_max_odds
-    result.filters["F4_Casa favorita"] = {
-        "value": f"{odds['home']:.2f} ({cfg.home_fav_min_odds}-{cfg.home_fav_max_odds})",
-        "pass": f4_pass,
-    }
+    over = odds["over25"]
+    f1_odds = over is not None and over <= cfg.over25_max_odds
+    f4 = (odds["home"] < odds["away"]) and (
+        cfg.home_fav_min_odds <= odds["home"] <= cfg.home_fav_max_odds
+    )
+    f5 = cfg.draw_min_odds <= odds["draw"] <= cfg.draw_max_odds
 
-    # === FILTRO 5: Pareggio 3.40 - 4.30 ===
-    f5_pass = cfg.draw_min_odds <= odds["draw"] <= cfg.draw_max_odds
-    result.filters["F5_Pareggio"] = {
-        "value": f"{odds['draw']:.2f} ({cfg.draw_min_odds}-{cfg.draw_max_odds})",
-        "pass": f5_pass,
-    }
+    over_txt = f"{over:.2f}" if over is not None else "n/d"
 
-    # Early exit: se le quote non passano, non sprechiamo API calls
-    if not (f1_pass and f4_pass and f5_pass):
-        result.passed_count = sum([f1_pass, f4_pass, f5_pass])
-        return result
+    # Early exit: non sprecare chiamate API se i filtri quota sono gia' falliti
+    if not (f4 and f5):
+        _record(r, "F1 Over 2.5", over_txt, f1_odds,
+                skipped=cfg.use_avg_goals_alternative and not f1_odds)
+        _record(r, "F2 Freq. 0-0", "non valutato", False, skipped=True)
+        _record(r, "F3 Gol 1°T", "non valutato", False, skipped=True)
+        _record(r, "F4 Casa favorita",
+                f"{odds['home']:.2f} [{cfg.home_fav_min_odds:.2f}-{cfg.home_fav_max_odds:.2f}]", f4)
+        _record(r, "F5 Pareggio",
+                f"{odds['draw']:.2f} [{cfg.draw_min_odds:.2f}-{cfg.draw_max_odds:.2f}]", f5)
+        r.passed_count = sum(v["pass"] for v in r.filters.values())
+        return r
 
-    # === FILTRI 2 e 3: statistiche squadre ===
+    # --- Storico (una chiamata per squadra, condiviso tra filtro 2 e 3) ---
+    size = max(cfg.zero_zero_sample_size, cfg.ht_sample_size)
     home_id = fixture["teams"]["home"]["id"]
     away_id = fixture["teams"]["away"]["id"]
     league_id = fixture["league"]["id"]
     season = fixture["league"]["season"]
 
-    home_matches = get_team_last_matches(home_id, league_id, season, cfg.zero_zero_sample_size)
-    away_matches = get_team_last_matches(away_id, league_id, season, cfg.zero_zero_sample_size)
+    h_all = get_team_last_matches(home_id, league_id, season, size)
+    a_all = get_team_last_matches(away_id, league_id, season, size)
 
-    # Filtro 2: 0-0 < 10%
-    max_00 = int(cfg.zero_zero_max_pct / 100 * cfg.zero_zero_sample_size)
-    h_00 = _count_0_0(home_matches)
-    a_00 = _count_0_0(away_matches)
-    f2_pass = (h_00 <= max_00) and (a_00 <= max_00)
-    result.filters["F2_Freq. 0-0"] = {
-        "value": f"Casa: {h_00}/{len(home_matches)} | Trasf: {a_00}/{len(away_matches)} (max {max_00})",
-        "pass": f2_pass,
-    }
+    h_z = _team_stats(h_all[:cfg.zero_zero_sample_size])
+    a_z = _team_stats(a_all[:cfg.zero_zero_sample_size])
+    h_h = _team_stats(h_all[:cfg.ht_sample_size])
+    a_h = _team_stats(a_all[:cfg.ht_sample_size])
 
-    # Filtro 3: Over 0.5 1HT >= 70%
-    min_1ht = int(cfg.ht_over05_min_pct / 100 * cfg.ht_sample_size)
-    h_1ht = _count_1ht_over05(home_matches)
-    a_1ht = _count_1ht_over05(away_matches)
-    f3_pass = (h_1ht >= min_1ht) and (a_1ht >= min_1ht)
-    result.filters["F3_Gol 1°T"] = {
-        "value": f"Casa: {h_1ht}/{len(home_matches)} | Trasf: {a_1ht}/{len(away_matches)} (min {min_1ht})",
-        "pass": f3_pass,
-    }
+    enough = (
+        h_z["n"] >= cfg.min_sample_size and a_z["n"] >= cfg.min_sample_size
+        and h_h["ht_n"] >= cfg.min_sample_size and a_h["ht_n"] >= cfg.min_sample_size
+    )
 
-    # Totale
-    all_pass = [f1_pass, f2_pass, f3_pass, f4_pass, f5_pass]
-    result.passed_count = sum(all_pass)
-    result.passed = all(all_pass)
-    return result
+    # F2: STRICT < 10%  → su 20 gare significa AL MASSIMO 1 zero-a-zero
+    f2 = enough and (
+        h_z["zero_pct"] < cfg.zero_zero_max_pct
+        and a_z["zero_pct"] < cfg.zero_zero_max_pct
+    )
+
+    # F3: >= 70%
+    f3 = enough and (
+        h_h["ht_pct"] >= cfg.ht_over05_min_pct
+        and a_h["ht_pct"] >= cfg.ht_over05_min_pct
+    )
+
+    # F1: quota OVER 2.5 OPPURE media gol delle due squadre
+    avg = (h_z["avg_goals"] + a_z["avg_goals"]) / 2 if enough else 0.0
+    f1 = f1_odds or (cfg.use_avg_goals_alternative and avg > cfg.avg_goals_min)
+
+    f1_txt = over_txt
+    if cfg.use_avg_goals_alternative:
+        f1_txt += f" | media {avg:.2f} (>{cfg.avg_goals_min})"
+
+    _record(r, "F1 Over 2.5", f1_txt, f1)
+    _record(r, "F2 Freq. 0-0",
+            f"C {h_z['zeros']}/{h_z['n']} ({h_z['zero_pct']:.0f}%) · "
+            f"T {a_z['zeros']}/{a_z['n']} ({a_z['zero_pct']:.0f}%)", f2)
+    _record(r, "F3 Gol 1°T",
+            f"C {h_h['ht']}/{h_h['ht_n']} ({h_h['ht_pct']:.0f}%) · "
+            f"T {a_h['ht']}/{a_h['ht_n']} ({a_h['ht_pct']:.0f}%)", f3)
+    _record(r, "F4 Casa favorita",
+            f"{odds['home']:.2f} [{cfg.home_fav_min_odds:.2f}-{cfg.home_fav_max_odds:.2f}]", f4)
+    _record(r, "F5 Pareggio",
+            f"{odds['draw']:.2f} [{cfg.draw_min_odds:.2f}-{cfg.draw_max_odds:.2f}]", f5)
+
+    r.passed_count = sum(v["pass"] for v in r.filters.values())
+    r.passed = r.passed_count == 5 and not any(v["skipped"] for v in r.filters.values())
+    return r
