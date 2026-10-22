@@ -1,108 +1,211 @@
-"""Client per API-Football (v3) con caching e rate limiting."""
-import os
+"""Client API-Football v3: cache su chiavi hashabili, rate limit, error handling."""
+from __future__ import annotations
+
 import time
+from datetime import date, datetime, timezone
+from typing import Dict, List, Optional, Tuple
+
 import requests
-from datetime import date
-from typing import List, Dict, Optional
 import streamlit as st
 
 from config import FilterConfig
+from credentials import get_secret
 
 BASE_URL = "https://v3.football.api-sports.io"
+FINISHED = {"FT", "AET", "PEN"}
+
+_last_call = 0.0
 
 
-def _get_headers() -> dict:
-    key = os.getenv("API_FOOTBALL_KEY") or st.secrets.get("API_FOOTBALL_KEY", "")
+class ApiError(RuntimeError):
+    pass
+
+
+class QuotaExceeded(ApiError):
+    pass
+
+
+# ----------------------------------------------------------------------
+# HTTP
+# ----------------------------------------------------------------------
+def _headers() -> dict:
+    key = get_secret("API_FOOTBALL_KEY")
     if not key:
-        raise ValueError("API_FOOTBALL_KEY non configurata. Vedi .env.example")
+        raise ApiError(
+            "API_FOOTBALL_KEY mancante. Configura .env (locale) o "
+            "Settings → Secrets (Streamlit Cloud)."
+        )
     return {"x-apisports-key": key}
 
 
-def _rate_limit():
-    """Rispetta il rate limit del piano free (~10 req/min)."""
-    time.sleep(1.2)
+def _get(path: str, params: dict) -> list:
+    global _last_call
+    wait = 1.2 - (time.monotonic() - _last_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.monotonic()
 
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_fixtures_today(cfg: FilterConfig) -> List[Dict]:
-    """Recupera le partite di oggi per i campionati target."""
-    today = date.today().strftime("%Y-%m-%d")
-    leagues = ",".join(str(l) for l in cfg.LEAGUES)
-    params = {"date": today, "league": leagues, "season": cfg.SEASON}
     try:
         r = requests.get(
-            f"{BASE_URL}/fixtures",
-            headers=_get_headers(),
-            params=params,
-            timeout=15,
+            BASE_URL + path, headers=_headers(), params=params, timeout=20
         )
-        r.raise_for_status()
-        return r.json().get("response", [])
-    except Exception as e:
-        st.error(f"Errore recupero partite: {e}")
-        return []
+    except requests.RequestException as exc:
+        raise ApiError(f"Errore di rete verso API-Football: {exc}") from exc
+
+    if r.status_code in (401, 403):
+        raise ApiError("Chiave API non valida o piano non attivo su RapidAPI.")
+    if r.status_code in (429, 499):
+        raise QuotaExceeded("Quota / rate limit API-Football esaurito.")
+
+    r.raise_for_status()
+    payload = r.json()
+
+    errors = payload.get("errors")
+    if errors:
+        text = str(errors)
+        if any(word in text.lower() for word in ("limit", "quota", "plan")):
+            raise QuotaExceeded(text)
+        raise ApiError(text)
+
+    return payload.get("response") or []
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_odds(fixture_id: int) -> List[Dict]:
-    """Recupera le quote pre-match per un fixture."""
-    _rate_limit()
-    try:
-        r = requests.get(
-            f"{BASE_URL}/odds",
-            headers=_get_headers(),
-            params={"fixture": fixture_id},
-            timeout=15,
-        )
-        r.raise_for_status()
-        return r.json().get("response", [])
-    except Exception:
-        return []
+# ----------------------------------------------------------------------
+# FIXTURES (solo pre-match)
+# ----------------------------------------------------------------------
+@st.cache_data(ttl=600, show_spinner=False)
+def _fixtures_cached(day: str, leagues: tuple, season: int) -> list:
+    return _get("/fixtures", {
+        "date": day,
+        "league": ",".join(str(x) for x in leagues),
+        "season": season,
+    })
 
 
-@st.cache_data(ttl=7200, show_spinner=False)
-def get_team_last_matches(team_id: int, league_id: int, season: int, last: int = 20) -> List[Dict]:
-    """Recupera le ultime N partite giocate da una squadra."""
-    _rate_limit()
-    try:
-        r = requests.get(
-            f"{BASE_URL}/fixtures",
-            headers=_get_headers(),
-            params={
-                "team": team_id,
-                "league": league_id,
-                "season": season,
-                "last": last,
-                "status": "FT",
-            },
-            timeout=15,
-        )
-        r.raise_for_status()
-        return r.json().get("response", [])
-    except Exception:
-        return []
+def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
+    day = day or date.today().isoformat()
+    raw = _fixtures_cached(day, tuple(sorted(cfg.LEAGUES)), int(cfg.SEASON))
+
+    now = datetime.now(timezone.utc).timestamp()
+    upcoming = []
+    for f in raw:
+        fx = f.get("fixture") or {}
+        status = (fx.get("status") or {}).get("short", "NS")
+        if status not in {"NS", "TBD"}:
+            continue  # niente partite gia' iniziate / giocate
+        if fx.get("timestamp") and fx["timestamp"] < now:
+            continue
+        upcoming.append(f)
+    return upcoming
 
 
-def extract_odds(odds_data: List[Dict], bookmakers: List[str]) -> Dict[str, Optional[float]]:
-    """Estrae le quote chiave dai dati grezzi."""
-    result = {"home": None, "draw": None, "away": None, "over25": None}
-    for book in odds_data:
-        for bm in book.get("bookmakers", []):
-            if bm["name"] not in bookmakers:
+# ----------------------------------------------------------------------
+# QUOTE
+# ----------------------------------------------------------------------
+@st.cache_data(ttl=900, show_spinner=False)
+def _odds_cached(fixture_id: int) -> list:
+    return _get("/odds", {"fixture": fixture_id})
+
+
+def get_odds(fixture_id: int) -> list:
+    return _odds_cached(int(fixture_id))
+
+
+# ----------------------------------------------------------------------
+# STORICO SQUADRA
+# ----------------------------------------------------------------------
+@st.cache_data(ttl=21600, show_spinner=False)
+def _history_cached(team_id: int, league_id: int, season: int, last: int) -> list:
+    return _get("/fixtures", {
+        "team": team_id, "league": league_id,
+        "season": season, "last": last, "status": "FT",
+    })
+
+
+def get_team_last_matches(team_id: int, league_id: int,
+                          season: int, last: int = 20) -> list:
+    raw = _history_cached(int(team_id), int(league_id), int(season), int(last))
+    return [
+        m for m in raw
+        if ((m.get("fixture") or {}).get("status") or {}).get("short") in FINISHED
+    ]
+
+
+# ----------------------------------------------------------------------
+# PARSING QUOTE (normalizzato)
+# ----------------------------------------------------------------------
+def _norm(value) -> str:
+    return str(value).strip().lower().replace(" ", "")
+
+
+_HOME = {"1", "home", "h", "homewin"}
+_DRAW = {"x", "draw", "d"}
+_AWAY = {"2", "away", "a", "awaywin"}
+_WIN_NAMES = {"matchwinner", "1x2", "matchresult", "win/draw/win"}
+_OU_NAMES = {"over/under", "overunder", "totals", "goalline"}
+
+
+def _is_over_25(value: str, line) -> bool:
+    if value in {"over2.5", "over2.50", "o2.5", "over2,5"}:
+        return True
+    if value in {"over", "o"} and line is not None:
+        try:
+            return float(line) == 2.5
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _parse_bookmaker(bm: dict) -> Dict[str, Optional[float]]:
+    out = {"home": None, "draw": None, "away": None, "over25": None}
+
+    for bet in bm.get("bets") or []:
+        name = _norm(bet.get("name", ""))
+        for v in bet.get("values") or []:
+            try:
+                odd = float(v.get("odd"))
+            except (TypeError, ValueError):
                 continue
-            for bet in bm["bets"]:
-                if bet["name"] == "Match Winner":
-                    for v in bet["values"]:
-                        if v["value"] == "Home":
-                            result["home"] = float(v["odd"])
-                        elif v["value"] == "Draw":
-                            result["draw"] = float(v["odd"])
-                        elif v["value"] == "Away":
-                            result["away"] = float(v["odd"])
-                elif bet["name"] == "Over/Under":
-                    for v in bet["values"]:
-                        if v["value"] == "Over 2.5":
-                            result["over25"] = float(v["odd"])
-            if all(v is not None for v in result.values()):
-                return result
-    return result
+            if odd <= 1.0:
+                continue
+
+            value = _norm(v.get("value", ""))
+
+            if name in _WIN_NAMES:
+                if value in _HOME:
+                    out["home"] = odd
+                elif value in _DRAW:
+                    out["draw"] = odd
+                elif value in _AWAY:
+                    out["away"] = odd
+
+            elif name in _OU_NAMES:
+                if _is_over_25(value, v.get("line", bet.get("line"))):
+                    out["over25"] = odd
+
+    return out
+
+
+def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
+    """Restituisce (quote, nome_bookmaker). Priorita' al bookmaker preferito."""
+    parsed: Dict[str, dict] = {}
+    for book in odds_data or []:
+        for bm in book.get("bookmakers") or []:
+            name = bm.get("name", "unknown")
+            if name not in parsed:
+                parsed[name] = _parse_bookmaker(bm)
+
+    def complete(p: dict) -> bool:
+        return all(p.get(k) is not None for k in ("home", "draw", "away"))
+
+    for name in preferred:                    # 1) preferito + completo
+        if complete(parsed.get(name, {})):
+            return parsed[name], name
+    for name, p in parsed.items():            # 2) qualsiasi + completo
+        if complete(p):
+            return p, name
+    for name in preferred:                    # 3) fallback parziale
+        if name in parsed:
+            return parsed[name], name
+
+    return {"home": None, "draw": None, "away": None, "over25": None}, ""
