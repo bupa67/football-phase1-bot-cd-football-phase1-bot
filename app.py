@@ -164,7 +164,7 @@ with st.sidebar:
 # ============================================================
 # HEADER
 # ============================================================
-st.title("⚽ Football Phase 1 Analyzer")
+st.title(" Football Phase 1 Analyzer")
 st.caption(
     f"📅 Analisi del **{scan_date.strftime('%d/%m/%Y')}** • "
     "Strategia Lay the Draw / Over 2.5"
@@ -211,7 +211,7 @@ if scan_btn:
 # PANNELLO DEBUG (SEMPRE VISIBILE, indipendente dalla scansione)
 # ============================================================
 st.divider()
-with st.expander("🐛 DEBUG API - Testa una lega specifica", expanded=True):
+with st.expander(" DEBUG API - Testa una lega specifica", expanded=True):
     st.markdown("""
     **Istruzioni:**
     1. Seleziona una lega
@@ -245,11 +245,12 @@ with st.expander("🐛 DEBUG API - Testa una lega specifica", expanded=True):
         status = debug_result.get("status_code")
         count = debug_result.get("parsed_data_count", 0)
         
-        if status == 200 and count and count > 0:
+        # FIX: usiamo isinstance per evitare il crash se count è una stringa
+        if status == 200 and isinstance(count, int) and count > 0:
             st.success(f"✅ API OK! Restituite **{count} partite** per {cfg_temp.LEAGUES_NAMES.get(debug_league, 'lega')}")
             st.info("Se qui vedi partite ma la scansione principale no, il problema è nel filtraggio.")
         elif status == 200:
-            st.warning(f"️ API ha risposto OK ma **0 partite** trovate per questa data/lega.")
+            st.warning(f"⚠️ API ha risposto OK ma **0 partite** trovate per questa data/lega.")
             st.info("Prova con un'altra data (es. domenica scorsa) o un'altra lega.")
         else:
             st.error(f"❌ Errore API: status {status}")
@@ -319,7 +320,7 @@ if st.session_state.last_fixtures is not None:
             st.divider()
             if st.button("📱 Invia su Telegram", type="primary", key="send_tg_btn"):
                 if not get_secret("TELEGRAM_BOT_TOKEN") or not get_secret("TELEGRAM_CHAT_ID"):
-                    st.error(" Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
+                    st.error("️ Configura TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID")
                 else:
                     msg = build_message(passed)
                     if send_telegram(msg):
@@ -330,7 +331,7 @@ if st.session_state.last_fixtures is not None:
             st.warning("❌ Nessuna partita supera tutti i 5 filtri.")
             almost = [r for r in results if r.passed_count == 4]
             if almost:
-                st.info(f"💡 **{len(almost)} partite** con 4/5 filtri:")
+                st.info(f" **{len(almost)} partite** con 4/5 filtri:")
                 for r in almost:
                     failed = [k for k, v in r.filters.items() if not v["pass"] and not v.get("skipped")]
                     st.write(f"• **{r.home} vs {r.away}** — fallisce: {', '.join(failed)}")
