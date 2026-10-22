@@ -1,4 +1,4 @@
-"""Client per API-Football.com (apifootball.com) con debug avanzato."""
+"""Client per API-Football.com (apifootball.com) - FIX formato data e multi-league."""
 from __future__ import annotations
 
 import time
@@ -15,7 +15,6 @@ from credentials import get_secret
 BASE_URL = "https://apiv3.apifootball.com/"
 logger = logging.getLogger(__name__)
 
-# Configura logging per mostrare i messaggi anche su Streamlit Cloud
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 _last_call = 0.0
@@ -30,7 +29,6 @@ class QuotaExceeded(ApiError):
 
 
 def _get_params() -> dict:
-    """Restituisce i parametri di autenticazione per apifootball.com."""
     key = get_secret("API_FOOTBALL_KEY")
     if not key or not key.strip():
         raise ApiError(
@@ -38,12 +36,10 @@ def _get_params() -> dict:
             "Locale: controlla il file .env\n"
             "Cloud: Settings → Secrets → salva e fai Restart app"
         )
-    # NOTA: apifootball.com richiede ESATTAMENTE "APIkey" (case-sensitive)
     return {"APIkey": key.strip()}
 
 
 def _api_request(action: str, params: dict) -> list:
-    """Esegue richiesta HTTP a apifootball.com con debug completo."""
     global _last_call
     wait = 1.2 - (time.monotonic() - _last_call)
     if wait > 0:
@@ -52,51 +48,34 @@ def _api_request(action: str, params: dict) -> list:
 
     req_params = {**_get_params(), "action": action, **params}
     
-    # Costruiamo l'URL completo per il debug (così vediamo se c'è un errore di battitura)
-    query_string = "&".join([f"{k}={v}" for k, v in req_params.items()])
-    full_url = f"{BASE_URL.rstrip('/')}?{query_string}"
-    
-    # Mascheriamo la chiave API nel log per sicurezza
-    safe_url = full_url.replace(req_params["APIkey"], "CHIAVE_NASCOSTA")
-    logger.info(f"🔗 URL Richiesta: {safe_url}")
-    
     try:
         r = requests.get(BASE_URL, params=req_params, timeout=20)
-        logger.info(f"📥 Status Code: {r.status_code}")
-        logger.info(f"📄 Raw Response: {r.text[:1000]}")  # Prime 1000 caratteri
         
         if r.status_code != 200:
-            raise ApiError(f"Errore HTTP {r.status_code}: {r.text}")
+            # Debug: mostra l'URL chiamato (con chiave mascherata)
+            safe_url = r.url.replace(req_params["APIkey"], "CHIAVE_NASCOSTA")
+            raise ApiError(
+                f"Errore HTTP {r.status_code}\n"
+                f"URL: {safe_url}\n"
+                f"Risposta: {r.text[:500]}"
+            )
             
         payload = r.json()
         
-        # apifootball a volte restituisce {"error": "messaggio"} invece di una lista
         if isinstance(payload, dict) and "error" in payload:
             err_msg = str(payload["error"])
-            logger.error(f"❌ Errore dal server API: {err_msg}")
-            
             if "invalid api key" in err_msg.lower() or "wrong api key" in err_msg.lower():
-                raise ApiError(
-                    "Chiave API non valida.\n"
-                    "1. Vai su https://apifootball.com/admin/\n"
-                    "2. Copia la chiave ESATTAMENTE come appare (no spazi)\n"
-                    "3. Su Streamlit Cloud: ricorda le virgolette \" \" nei Secrets e fai Restart app"
-                )
+                raise ApiError("Chiave API non valida. Controlla la dashboard di apifootball.com")
             raise ApiError(f"Errore API: {err_msg}")
             
         return payload if isinstance(payload, list) else []
         
     except requests.RequestException as exc:
-        logger.error(f"💥 Errore di rete: {exc}")
         raise ApiError(f"Errore di rete: {exc}") from exc
     except ValueError:
-        logger.error(f"❌ Risposta non JSON: {r.text}")
         raise ApiError("Risposta API non valida (non JSON)")
 
 
-# ----------------------------------------------------------------------
-# NORMALIZZAZIONE DATI
-# ----------------------------------------------------------------------
 def _normalize_match(m: dict) -> dict:
     def safe_int(val):
         try:
@@ -136,22 +115,42 @@ def _normalize_match(m: dict) -> dict:
     }
 
 
-# ----------------------------------------------------------------------
-# ENDPOINTS
-# ----------------------------------------------------------------------
+def _convert_date_format(iso_date: str) -> str:
+    """Converte 'yyyy-mm-dd' in 'dd-mm-yyyy' (formato richiesto da apifootball.com)."""
+    try:
+        d = datetime.strptime(iso_date, "%Y-%m-%d")
+        return d.strftime("%d-%m-%Y")
+    except ValueError:
+        return iso_date
+
+
 @st.cache_data(ttl=600, show_spinner=False)
-def _fixtures_cached(date_str: str, league_ids: tuple) -> list:
+def _fixtures_for_league_cached(date_ddmmyyyy: str, league_id: int) -> list:
+    """Recupera le partite per UNA singola lega in una data."""
     raw = _api_request("get_events", {
-        "from": date_str,
-        "to": date_str,
-        "league_id": ",".join(str(x) for x in league_ids)
+        "from": date_ddmmyyyy,
+        "to": date_ddmmyyyy,
+        "league_id": str(league_id)
     })
     return [_normalize_match(m) for m in raw if m.get("match_status") in ("Not Started", "NS", "TBD")]
 
 
 def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
+    """Recupera partite per TUTTE le leghe selezionate, una alla volta."""
     day = day or date.today().isoformat()
-    return _fixtures_cached(day, tuple(sorted(cfg.LEAGUES)))
+    date_ddmmyyyy = _convert_date_format(day)
+    
+    all_fixtures = []
+    for league_id in cfg.LEAGUES:
+        try:
+            fixtures = _fixtures_for_league_cached(date_ddmmyyyy, league_id)
+            all_fixtures.extend(fixtures)
+        except ApiError as e:
+            # Se una lega dà errore, salta e continua con le altre
+            logger.warning(f"Errore per lega {league_id}: {e}")
+            continue
+    
+    return all_fixtures
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -176,17 +175,14 @@ def _history_cached(team_id: int, from_date: str, to_date: str) -> list:
 
 def get_team_last_matches(team_id: int, league_id: int, season: int, last: int = 20) -> list:
     today = date.today()
-    from_date = (today - timedelta(days=120)).isoformat()
-    to_date = today.isoformat()
+    from_date = _convert_date_format((today - timedelta(days=120)).isoformat())
+    to_date = _convert_date_format(today.isoformat())
     
     all_finished = _history_cached(int(team_id), from_date, to_date)
     sorted_matches = sorted(all_finished, key=lambda x: x["fixture"]["date"], reverse=True)
     return sorted_matches[:last]
 
 
-# ----------------------------------------------------------------------
-# PARSING QUOTE
-# ----------------------------------------------------------------------
 def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
     if not odds_data:
         return {"home": None, "draw": None, "away": None, "over25": None}, ""
@@ -221,40 +217,30 @@ def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
 
     return {"home": None, "draw": None, "away": None, "over25": None}, ""
 
+
 def test_api_connection() -> str:
-    """
-    Testa la connessione API con l'endpoint più semplice possibile (get_countries).
-    Restituisce "OK" o il messaggio di errore esatto.
-    """
     key = get_secret("API_FOOTBALL_KEY")
     if not key or not key.strip():
         return "❌ La chiave API è vuota o non configurata."
     
-    # Endpoint di test che richiede solo la APIkey
     url = "https://apiv3.apifootball.com/"
     params = {"APIkey": key.strip(), "action": "get_countries"}
     
     try:
-        # Mascheriamo la chiave per la stampa a video
-        safe_params = {**params, "APIkey": "CHIAVE_NASCOSTA"}
-        print(f"DEBUG URL: {url}?APIkey=CHIAVE_NASCOSTA&action=get_countries")
-        
         r = requests.get(url, params=params, timeout=10)
         
         if r.status_code != 200:
-            return f"❌ Errore HTTP {r.status_code}. Risposta del server: {r.text}"
+            return f"❌ Errore HTTP {r.status_code}. Risposta: {r.text}"
             
         data = r.json()
         
-        # Se apifootball restituisce un errore dentro il JSON
         if isinstance(data, dict) and "error" in data:
             return f"❌ Errore dall'API: {data['error']}"
             
-        # Se restituisce una lista di paesi, funziona!
         if isinstance(data, list) and len(data) > 0:
             return f"✅ Connessione riuscita! Trovati {len(data)} paesi. La chiave è valida."
             
-        return f"⚠️ Risposta inaspettata: {data}"
+        return f"️ Risposta inaspettata: {data}"
         
     except Exception as e:
-        return f"❌ Eccezione durante la richiesta: {str(e)}"
+        return f"❌ Eccezione: {str(e)}"
