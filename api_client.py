@@ -1,4 +1,4 @@
-"""Client per API-Football.com (apifootball.com) - FIX formato data e multi-league."""
+"""Client per API-Football.com (apifootball.com) - FIX formato data e debug."""
 from __future__ import annotations
 
 import time
@@ -131,7 +131,15 @@ def _fixtures_for_league_cached(date_ddmmyyyy: str, league_id: int) -> list:
         "to": date_ddmmyyyy,
         "league_id": str(league_id)
     })
-    return [_normalize_match(m) for m in raw if m.get("match_status") in ("Not Started", "NS", "TBD")]
+    
+    # Debug: mostra quanti match grezzi arrivano
+    if raw:
+        logger.info(f"✅ Lega {league_id}: ricevuti {len(raw)} match grezzi")
+        sample_statuses = [m.get("match_status", "N/A") for m in raw[:3]]
+        logger.info(f"📋 Status sample: {sample_statuses}")
+    
+    # NON filtrare per status - restituisci tutto per debug
+    return [_normalize_match(m) for m in raw]
 
 
 def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
@@ -148,6 +156,7 @@ def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
             logger.warning(f"Errore per lega {league_id}: {e}")
             continue
     
+    logger.info(f"📊 Totale partite ricevute: {len(all_fixtures)}")
     return all_fixtures
 
 
