@@ -271,38 +271,58 @@ def search_leagues(query: str = "") -> list:
         or query_lower in l.get("country_name", "").lower()
     ]
 def debug_api_response(day: str, league_id: int) -> dict:
-    """Chiama l'API e restituisce la risposta grezza per debug."""
+    """Chiama l'API con e senza league_id per isolare il problema."""
     date_ddmmyyyy = _convert_date_format(day)
+    key = get_secret("API_FOOTBALL_KEY").strip()
     
-    key = get_secret("API_FOOTBALL_KEY")
-    params = {
-        "APIkey": key.strip(),
+    # Tentativo 1: CON league_id
+    params_with_league = {
+        "APIkey": key,
         "action": "get_events",
         "from": date_ddmmyyyy,
         "to": date_ddmmyyyy,
         "league_id": str(league_id)
     }
     
-    try:
-        r = requests.get(BASE_URL, params=params, timeout=20)
-        
-        result = {
-            "url": r.url.replace(key, "CHIAVE_NASCOSTA"),
-            "status_code": r.status_code,
-            "response_length": len(r.text),
-            "raw_response": r.text[:3000],
-        }
-        
-        if r.status_code == 200:
-            try:
-                data = r.json()
-                result["parsed_data_count"] = len(data) if isinstance(data, list) else "non-list"
-                if isinstance(data, list) and len(data) > 0:
-                    result["sample_match"] = data[0]
-            except:
-                result["parse_error"] = "Non è JSON valido"
-        
-        return result
-        
-    except Exception as e:
-        return {"error": str(e)}
+    # Tentativo 2: SENZA league_id (solo data)
+    params_without_league = {
+        "APIkey": key,
+        "action": "get_events",
+        "from": date_ddmmyyyy,
+        "to": date_ddmmyyyy
+    }
+    
+    results = {}
+    
+    for test_name, params in [("CON league_id", params_with_league), ("SENZA league_id", params_without_league)]:
+        try:
+            r = requests.get(BASE_URL, params=params, timeout=20)
+            safe_url = r.url.replace(key, "CHIAVE_NASCOSTA")
+            
+            test_result = {
+                "url": safe_url,
+                "status_code": r.status_code,
+            }
+            
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if isinstance(data, list):
+                        test_result["parsed_data_count"] = len(data)
+                        if len(data) > 0:
+                            test_result["sample_match"] = data[0].get("match_hometeam_name", "Unknown") + " vs " + data[0].get("match_awayteam_name", "Unknown")
+                    else:
+                        test_result["parsed_data_count"] = "non-list"
+                        test_result["raw_error"] = data
+                except:
+                    test_result["parse_error"] = "Non è JSON valido"
+                    test_result["raw_response"] = r.text[:500]
+            else:
+                test_result["raw_response"] = r.text[:500]
+                
+            results[test_name] = test_result
+            
+        except Exception as e:
+            results[test_name] = {"error": str(e)}
+            
+    return results
