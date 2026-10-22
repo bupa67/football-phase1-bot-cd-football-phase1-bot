@@ -1,4 +1,4 @@
-"""Client API-Football v3: cache su chiavi hashabili, rate limit, error handling."""
+"""Client API-Football v3: cache su chiavi hashabili, rate limit, error handling robusto."""
 from __future__ import annotations
 
 import time
@@ -26,20 +26,28 @@ class QuotaExceeded(ApiError):
 
 
 # ----------------------------------------------------------------------
-# HTTP
+# HTTP & HEADERS (FIX CRUCIALE: invia entrambi i formati di chiave)
 # ----------------------------------------------------------------------
 def _headers() -> dict:
     key = get_secret("API_FOOTBALL_KEY")
     if not key:
         raise ApiError(
-            "API_FOOTBALL_KEY mancante. Configura .env (locale) o "
-            "Settings → Secrets (Streamlit Cloud)."
+            "API_FOOTBALL_KEY mancante. Configura il file .env (in locale) o "
+            "Settings → Secrets (su Streamlit Cloud)."
         )
-    return {"x-apisports-key": key}
+    
+    # Inviamo entrambi gli header per massima compatibilità.
+    # Funziona sia per chi usa RapidAPI che per chi usa API-Football diretto.
+    return {
+        "x-apisports-key": key,
+        "x-rapidapi-key": key,
+        "x-rapidapi-host": "v3.football.api-sports.io"
+    }
 
 
 def _get(path: str, params: dict) -> list:
     global _last_call
+    # Rate limiting: rispetta il limite di ~10-15 richieste al minuto del piano free
     wait = 1.2 - (time.monotonic() - _last_call)
     if wait > 0:
         time.sleep(wait)
@@ -53,7 +61,7 @@ def _get(path: str, params: dict) -> list:
         raise ApiError(f"Errore di rete verso API-Football: {exc}") from exc
 
     if r.status_code in (401, 403):
-        raise ApiError("Chiave API non valida o piano non attivo su RapidAPI.")
+        raise ApiError("Chiave API non valida, scaduta o piano non attivo. Controlla la tua dashboard.")
     if r.status_code in (429, 499):
         raise QuotaExceeded("Quota / rate limit API-Football esaurito.")
 
@@ -63,7 +71,7 @@ def _get(path: str, params: dict) -> list:
     errors = payload.get("errors")
     if errors:
         text = str(errors)
-        if any(word in text.lower() for word in ("limit", "quota", "plan")):
+        if any(word in text.lower() for word in ("limit", "quota", "plan", "key", "token")):
             raise QuotaExceeded(text)
         raise ApiError(text)
 
@@ -91,10 +99,15 @@ def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
     for f in raw:
         fx = f.get("fixture") or {}
         status = (fx.get("status") or {}).get("short", "NS")
+        
+        # Accetta solo partite non iniziate (NS = Not Started, TBD = To Be Defined)
         if status not in {"NS", "TBD"}:
-            continue  # niente partite gia' iniziate / giocate
+            continue
+        
+        # Sicurezza extra: scarta partite il cui timestamp è già passato
         if fx.get("timestamp") and fx["timestamp"] < now:
             continue
+            
         upcoming.append(f)
     return upcoming
 
@@ -132,7 +145,7 @@ def get_team_last_matches(team_id: int, league_id: int,
 
 
 # ----------------------------------------------------------------------
-# PARSING QUOTE (normalizzato)
+# PARSING QUOTE (normalizzato per gestire "1/X/2" e "Home/Draw/Away")
 # ----------------------------------------------------------------------
 def _norm(value) -> str:
     return str(value).strip().lower().replace(" ", "")
@@ -141,8 +154,8 @@ def _norm(value) -> str:
 _HOME = {"1", "home", "h", "homewin"}
 _DRAW = {"x", "draw", "d"}
 _AWAY = {"2", "away", "a", "awaywin"}
-_WIN_NAMES = {"matchwinner", "1x2", "matchresult", "win/draw/win"}
-_OU_NAMES = {"over/under", "overunder", "totals", "goalline"}
+_WIN_NAMES = {"matchwinner", "1x2", "matchresult", "win/draw/win", "fulltimeresult"}
+_OU_NAMES = {"over/under", "overunder", "totals", "goalline", "goals"}
 
 
 def _is_over_25(value: str, line) -> bool:
@@ -187,7 +200,7 @@ def _parse_bookmaker(bm: dict) -> Dict[str, Optional[float]]:
 
 
 def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
-    """Restituisce (quote, nome_bookmaker). Priorita' al bookmaker preferito."""
+    """Restituisce (quote, nome_bookmaker). Priorità al bookmaker preferito."""
     parsed: Dict[str, dict] = {}
     for book in odds_data or []:
         for bm in book.get("bookmakers") or []:
@@ -198,13 +211,18 @@ def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
     def complete(p: dict) -> bool:
         return all(p.get(k) is not None for k in ("home", "draw", "away"))
 
-    for name in preferred:                    # 1) preferito + completo
+    # 1) Cerca bookmaker preferito con dati completi
+    for name in preferred:
         if complete(parsed.get(name, {})):
             return parsed[name], name
-    for name, p in parsed.items():            # 2) qualsiasi + completo
+            
+    # 2) Cerca qualsiasi bookmaker con dati completi
+    for name, p in parsed.items():
         if complete(p):
             return p, name
-    for name in preferred:                    # 3) fallback parziale
+            
+    # 3) Fallback: restituisci il primo bookmaker preferito trovato (anche parziale)
+    for name in preferred:
         if name in parsed:
             return parsed[name], name
 
