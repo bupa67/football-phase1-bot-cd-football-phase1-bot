@@ -1,7 +1,8 @@
-"""Client API-Football v3: cache su chiavi hashabili, rate limit, error handling robusto."""
+"""Client API-Football v3 con debug completo."""
 from __future__ import annotations
 
 import time
+import logging
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -10,6 +11,10 @@ import streamlit as st
 
 from config import FilterConfig
 from credentials import get_secret
+
+# Configura logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://v3.football.api-sports.io"
 FINISHED = {"FT", "AET", "PEN"}
@@ -25,62 +30,122 @@ class QuotaExceeded(ApiError):
     pass
 
 
-# ----------------------------------------------------------------------
-# HTTP & HEADERS (FIX CRUCIALE: invia entrambi i formati di chiave)
-# ----------------------------------------------------------------------
 def _headers() -> dict:
+    """Costruisce gli header con debug completo."""
     key = get_secret("API_FOOTBALL_KEY")
-    if not key:
+    
+    # Debug: mostra info sulla chiave (senza rivelarla tutta)
+    if key:
+        key_preview = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "chiave troppo corta"
+        logger.info(f"✅ API Key trovata: {key_preview}")
+        logger.info(f" Lunghezza chiave: {len(key)} caratteri")
+    else:
+        logger.error("❌ API Key NON trovata!")
         raise ApiError(
-            "API_FOOTBALL_KEY mancante. Configura il file .env (in locale) o "
-            "Settings → Secrets (su Streamlit Cloud)."
+            "API_FOOTBALL_KEY mancante. "
+            "Locale: controlla il file .env\n"
+            "Cloud: Settings → Secrets → salva e fai Restart app"
         )
     
-    # Inviamo entrambi gli header per massima compatibilità.
-    # Funziona sia per chi usa RapidAPI che per chi usa API-Football diretto.
-    return {
-        "x-apisports-key": key,
-        "x-rapidapi-key": key,
-        "x-rapidapi-host": "v3.football.api-sports.io"
+    # Verifica formato chiave
+    if not key.strip():
+        raise ApiError("API Key è vuota o contiene solo spazi")
+    
+    # Headers compatibili con TUTTE le versioni API
+    headers = {
+        "x-apisports-key": key.strip(),
     }
+    
+    # Aggiungi header RapidAPI solo se sembra una chiave RapidAPI
+    if "rapid" in key.lower() or len(key) > 30:
+        headers["x-rapidapi-key"] = key.strip()
+        headers["x-rapidapi-host"] = "v3.football.api-sports.io"
+    
+    logger.info(f"📤 Headers inviati: {list(headers.keys())}")
+    return headers
 
 
 def _get(path: str, params: dict) -> list:
+    """Esegue richiesta HTTP con logging completo."""
     global _last_call
-    # Rate limiting: rispetta il limite di ~10-15 richieste al minuto del piano free
+    
+    # Rate limiting
     wait = 1.2 - (time.monotonic() - _last_call)
     if wait > 0:
         time.sleep(wait)
     _last_call = time.monotonic()
-
+    
+    url = BASE_URL + path
+    headers = _headers()
+    
+    logger.info(f"🔗 Richiesta: {url}")
+    logger.info(f"📦 Params: {params}")
+    
     try:
-        r = requests.get(
-            BASE_URL + path, headers=_headers(), params=params, timeout=20
-        )
+        r = requests.get(url, headers=headers, params=params, timeout=20)
+        logger.info(f"📥 Risposta HTTP {r.status_code}")
+        
+        # Log dettagliato errori
+        if r.status_code != 200:
+            logger.error(f" Errore HTTP {r.status_code}")
+            logger.error(f"📄 Response: {r.text[:500]}")
+        
     except requests.RequestException as exc:
+        logger.error(f"💥 Errore di rete: {exc}")
         raise ApiError(f"Errore di rete verso API-Football: {exc}") from exc
 
-    if r.status_code in (401, 403):
-        raise ApiError("Chiave API non valida, scaduta o piano non attivo. Controlla la tua dashboard.")
+    if r.status_code == 401:
+        raise ApiError(
+            "❌ Errore 401: Chiave API non valida.\n"
+            "1. Verifica di aver copiato la chiave corretta da RapidAPI o API-Football\n"
+            "2. Controlla che non ci siano spazi prima/dopo la chiave\n"
+            "3. Su Streamlit Cloud: fai Manage app → Restart app"
+        )
+    
+    if r.status_code == 403:
+        raise ApiError(
+            "❌ Errore 403: Accesso negato.\n"
+            "- Il tuo piano API potrebbe essere scaduto\n"
+            "- Verifica su https://rapidapi.com/developer/dashboard"
+        )
+    
     if r.status_code in (429, 499):
-        raise QuotaExceeded("Quota / rate limit API-Football esaurito.")
+        raise QuotaExceeded("️ Quota API esaurita. Riprova domani.")
 
-    r.raise_for_status()
-    payload = r.json()
+    try:
+        payload = r.json()
+    except ValueError:
+        logger.error(f"❌ Risposta non è JSON: {r.text[:200]}")
+        raise ApiError("Risposta API non valida (non JSON)")
 
-    errors = payload.get("errors")
+    # Controlla errori nell'payload
+    errors = payload.get("errors") or payload.get("error")
     if errors:
-        text = str(errors)
-        if any(word in text.lower() for word in ("limit", "quota", "plan", "key", "token")):
-            raise QuotaExceeded(text)
-        raise ApiError(text)
+        error_msg = str(errors)
+        logger.error(f"❌ Errore API: {error_msg}")
+        
+        if "key" in error_msg.lower() or "token" in error_msg.lower():
+            raise ApiError(
+                f"❌ Errore chiave API: {error_msg}\n"
+                "SOLUZIONE:\n"
+                "1. Vai su Manage app → Settings → Secrets\n"
+                "2. Clicca 'Edit secrets'\n"
+                "3. Assicurati che sia scritto ESATTAMENTE così:\n"
+                '   API_FOOTBALL_KEY = "la_tua_chiave"\n'
+                "4. Clicca Save\n"
+                "5. Clicca Restart app"
+            )
+        raise ApiError(error_msg)
 
-    return payload.get("response") or []
+    response = payload.get("response")
+    if response is None:
+        logger.warning("⚠️ Campo 'response' vuoto nell'API")
+        return []
+    
+    logger.info(f"✅ Ricevuti {len(response)} elementi")
+    return response
 
 
-# ----------------------------------------------------------------------
-# FIXTURES (solo pre-match)
-# ----------------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
 def _fixtures_cached(day: str, leagues: tuple, season: int) -> list:
     return _get("/fixtures", {
@@ -99,22 +164,14 @@ def get_fixtures_today(cfg: FilterConfig, day: Optional[str] = None) -> list:
     for f in raw:
         fx = f.get("fixture") or {}
         status = (fx.get("status") or {}).get("short", "NS")
-        
-        # Accetta solo partite non iniziate (NS = Not Started, TBD = To Be Defined)
         if status not in {"NS", "TBD"}:
             continue
-        
-        # Sicurezza extra: scarta partite il cui timestamp è già passato
         if fx.get("timestamp") and fx["timestamp"] < now:
             continue
-            
         upcoming.append(f)
     return upcoming
 
 
-# ----------------------------------------------------------------------
-# QUOTE
-# ----------------------------------------------------------------------
 @st.cache_data(ttl=900, show_spinner=False)
 def _odds_cached(fixture_id: int) -> list:
     return _get("/odds", {"fixture": fixture_id})
@@ -124,9 +181,6 @@ def get_odds(fixture_id: int) -> list:
     return _odds_cached(int(fixture_id))
 
 
-# ----------------------------------------------------------------------
-# STORICO SQUADRA
-# ----------------------------------------------------------------------
 @st.cache_data(ttl=21600, show_spinner=False)
 def _history_cached(team_id: int, league_id: int, season: int, last: int) -> list:
     return _get("/fixtures", {
@@ -144,9 +198,6 @@ def get_team_last_matches(team_id: int, league_id: int,
     ]
 
 
-# ----------------------------------------------------------------------
-# PARSING QUOTE (normalizzato per gestire "1/X/2" e "Home/Draw/Away")
-# ----------------------------------------------------------------------
 def _norm(value) -> str:
     return str(value).strip().lower().replace(" ", "")
 
@@ -200,7 +251,6 @@ def _parse_bookmaker(bm: dict) -> Dict[str, Optional[float]]:
 
 
 def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
-    """Restituisce (quote, nome_bookmaker). Priorità al bookmaker preferito."""
     parsed: Dict[str, dict] = {}
     for book in odds_data or []:
         for bm in book.get("bookmakers") or []:
@@ -211,17 +261,12 @@ def extract_odds(odds_data: list, preferred: List[str]) -> Tuple[dict, str]:
     def complete(p: dict) -> bool:
         return all(p.get(k) is not None for k in ("home", "draw", "away"))
 
-    # 1) Cerca bookmaker preferito con dati completi
     for name in preferred:
         if complete(parsed.get(name, {})):
             return parsed[name], name
-            
-    # 2) Cerca qualsiasi bookmaker con dati completi
     for name, p in parsed.items():
         if complete(p):
             return p, name
-            
-    # 3) Fallback: restituisci il primo bookmaker preferito trovato (anche parziale)
     for name in preferred:
         if name in parsed:
             return parsed[name], name
